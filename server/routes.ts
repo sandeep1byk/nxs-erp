@@ -4,6 +4,8 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import multer from "multer";
 import supabase from "./supabase";
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const pdfParse = require("pdf-parse");
 
 // ---- file upload (Supabase Storage) ----------------------------------------
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
@@ -433,6 +435,161 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       res.json({ url: fileUrl, vault_id: vaultDoc?.id, file_name: file.originalname });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+
+  // ---- Tally Import: parse PDF -------------------------------------------
+  const uploadPdf = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+
+  app.post("/api/tally/parse-pdf", auth, uploadPdf.single("pdf"), async (req: AuthedRequest, res) => {
+    try {
+      const file = (req as any).file;
+      if (!file) return res.status(400).json({ message: "No PDF provided" });
+
+      let text = "";
+      try {
+        const pdfData = await pdfParse(file.buffer);
+        text = pdfData.text || "";
+      } catch (e: any) {
+        return res.status(400).json({ message: `Could not read PDF: ${e.message}` });
+      }
+
+      const extract = (patterns: RegExp[]): string => {
+        for (const p of patterns) {
+          const m = text.match(p);
+          if (m?.[1]) return m[1].trim();
+        }
+        return "";
+      };
+
+      const invoice_number = extract([
+        /(?:Invoice\s*No\.?|Tax\s*Invoice\s*No\.?|Inv\.?\s*No\.?|Voucher\s*No\.?)\s*[:#]?\s*([A-Z0-9\/\-]+)/i,
+        /(?:Invoice\s*Number|Bill\s*No\.?)\s*[:#]?\s*([A-Z0-9\/\-]+)/i,
+      ]);
+
+      const rawDate = extract([
+        /(?:Invoice\s*Date|Dated|Date)\s*[:#]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
+        /(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})/,
+        /(\d{4}[\/\-]\d{2}[\/\-]\d{2})/,
+      ]);
+      let invoice_date = rawDate;
+      if (rawDate) {
+        const dmy = rawDate.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+        if (dmy) {
+          const year = dmy[3].length === 2 ? `20${dmy[3]}` : dmy[3];
+          invoice_date = `${year}-${dmy[2].padStart(2, "0")}-${dmy[1].padStart(2, "0")}`;
+        }
+      }
+
+      const client_name = extract([
+        /(?:Bill\s*To|Buyer|Party\s*Name|To)[:\s]+([A-Za-z][A-Za-z0-9 &.,'\-]{2,60})/i,
+      ]);
+
+      const totalStr = extract([
+        /(?:Grand\s*Total|Total\s*Amount|Invoice\s*Total|Net\s*Total)[:\s]+(?:AED\s*)?([\d,]+\.?\d*)/i,
+        /(?:Total)[:\s]+(?:AED\s*)?([\d,]+\.?\d*)/i,
+      ]);
+      const vatStr = extract([
+        /(?:VAT|Tax\s*Amount|IGST|GST|Output\s*VAT)[:\s]+(?:AED\s*)?([\d,]+\.?\d*)/i,
+      ]);
+      const subStr = extract([
+        /(?:Sub\s*Total|Taxable\s*Amount|Net\s*Amount)[:\s]+(?:AED\s*)?([\d,]+\.?\d*)/i,
+      ]);
+
+      const total_amount = parseFloat(totalStr.replace(/,/g, "")) || 0;
+      const vat_amount = parseFloat(vatStr.replace(/,/g, "")) || Math.round(total_amount / 1.05 * 0.05 * 100) / 100;
+      const amount = parseFloat(subStr.replace(/,/g, "")) || Math.round((total_amount - vat_amount) * 100) / 100;
+
+      res.json({
+        invoice_number: invoice_number || `TALLY-${Date.now()}`,
+        invoice_date: invoice_date || new Date().toISOString().slice(0, 10),
+        client_name,
+        amount,
+        vat_amount,
+        total_amount,
+        status: "draft",
+        notes: `Imported from Tally PDF: ${file.originalname}`,
+      });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // ---- Tally Import: bulk create invoices + clients -----------------------
+  app.post("/api/tally/import", auth, async (req: AuthedRequest, res) => {
+    try {
+      const { invoices } = req.body || {};
+      if (!Array.isArray(invoices) || !invoices.length) {
+        return res.status(400).json({ message: "No invoices provided" });
+      }
+
+      let created = 0;
+      let skipped = 0;
+      const clientCache = new Map<string, string>();
+
+      for (const inv of invoices) {
+        try {
+          let client_id: string | null = null;
+          if (inv.client_name) {
+            const nameKey = inv.client_name.toLowerCase().trim();
+            if (clientCache.has(nameKey)) {
+              client_id = clientCache.get(nameKey)!;
+            } else {
+              const { data: existing } = await supabase
+                .from("clients")
+                .select("id, name")
+                .ilike("name", inv.client_name.trim())
+                .limit(1);
+              if (existing && existing.length > 0) {
+                client_id = existing[0].id;
+              } else {
+                const { data: newClient, error: clientErr } = await supabase
+                  .from("clients")
+                  .insert({ name: inv.client_name.trim() })
+                  .select()
+                  .single();
+                if (!clientErr && newClient) client_id = newClient.id;
+              }
+              if (client_id) clientCache.set(nameKey, client_id);
+            }
+          }
+
+          if (inv.invoice_number) {
+            const { data: dup } = await supabase
+              .from("invoices")
+              .select("id")
+              .eq("invoice_number", inv.invoice_number)
+              .limit(1);
+            if (dup && dup.length > 0) { skipped++; continue; }
+          }
+
+          const payload: any = {
+            invoice_number: inv.invoice_number || `IMP-${Date.now()}`,
+            invoice_date: inv.invoice_date || new Date().toISOString().slice(0, 10),
+            due_date: inv.invoice_date || new Date().toISOString().slice(0, 10),
+            client_id,
+            client_name: inv.client_name || null,
+            subtotal: inv.amount || 0,
+            vat_amount: inv.vat_amount || 0,
+            total_amount: inv.total_amount || 0,
+            status: "draft",
+            notes: inv.notes || "Imported from Tally",
+            items: JSON.stringify([]),
+          };
+
+          const { error: invErr } = await supabase.from("invoices").insert(payload);
+          if (invErr) { console.error("Invoice insert error:", invErr.message); skipped++; continue; }
+          created++;
+        } catch (rowErr: any) {
+          console.error("Row import error:", rowErr.message);
+          skipped++;
+        }
+      }
+
+      res.json({ created, skipped, total: invoices.length });
     } catch (e: any) {
       res.status(500).json({ message: e.message });
     }

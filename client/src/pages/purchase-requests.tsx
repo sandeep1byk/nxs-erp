@@ -8,6 +8,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useMutation } from "@tanstack/react-query";
 import { fmtDate, nextNumber } from "@/lib/nxs";
 import { useAuth } from "@/lib/auth";
+import { QuickAddSelect } from "@/components/quick-add-select";
 
 export default function PurchaseRequests() {
   const { user } = useAuth();
@@ -27,7 +28,6 @@ export default function PurchaseRequests() {
 
   const fields: FormFieldDef[] = [
     { name: "pr_number", label: "PR Number", required: true },
-    { name: "project_id", label: "Project", type: "select", options: (projects || []).map((p: any) => ({ value: p.id, label: p.name })) },
     { name: "request_date", label: "Request Date", type: "date" },
     { name: "status", label: "Status", type: "select", options: ["draft", "submitted", "approved", "rejected", "converted"].map((s) => ({ value: s, label: s })) },
     { name: "notes", label: "Notes", type: "textarea" },
@@ -51,7 +51,24 @@ export default function PurchaseRequests() {
       <FormDialog open={open} onClose={() => setOpen(false)} title={editing?.id ? "Edit PR" : "New Purchase Request"}
         fields={fields} initial={editing} saving={save.isPending}
         onSave={(v) => save.mutate(v, { onSuccess: () => setOpen(false) })}
-        extra={(values, set) => <LineItemsEditor items={values.items || []} onChange={(items) => set({ ...values, items })} />} />
+        extra={(values, set) => (
+          <div className="space-y-4">
+            {/* Project quick-add */}
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Project</label>
+              <QuickAddSelect
+                type="project"
+                options={(projects || []).map((p: any) => ({ value: p.id, label: p.name }))}
+                value={values.project_id || ""}
+                onChange={(v) => set({ ...values, project_id: v })}
+                placeholder="Select project…"
+                data-testid="select-project"
+              />
+            </div>
+            {/* Line items */}
+            <LineItemsEditor items={values.items || []} onChange={(items) => set({ ...values, items })} />
+          </div>
+        )} />
     </div>
   );
 }

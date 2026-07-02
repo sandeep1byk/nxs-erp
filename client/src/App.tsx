@@ -32,6 +32,7 @@ import Bank from "@/pages/bank";
 import Documents from "@/pages/documents";
 import FinanceQuickEntry from "@/pages/finance-quick-entry";
 import MyShortcuts from "@/pages/my-shortcuts";
+import TallyImport from "@/pages/tally-import";
 
 function AppRouter() {
   return (
@@ -60,6 +61,7 @@ function AppRouter() {
         <Route path="/documents" component={Documents} />
         <Route path="/finance-quick-entry" component={FinanceQuickEntry} />
         <Route path="/my-shortcuts" component={MyShortcuts} />
+        <Route path="/tally-import" component={TallyImport} />
         <Route component={NotFound} />
       </Switch>
     </AppLayout>

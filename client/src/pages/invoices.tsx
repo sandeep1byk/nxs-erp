@@ -3,7 +3,9 @@ import { PageHeader, useList, useSave, useRemove, StatusBadge } from "@/componen
 import { DataTable } from "@/components/data-table";
 import { FormDialog, FormFieldDef, LineItemsEditor } from "@/components/crud-kit";
 import { PrintDialog, ItemsTable, TotalsBlock, SignatureLines, COMPANY } from "@/components/print-doc";
+import { QuickAddSelect } from "@/components/quick-add-select";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
 import { Plus, Printer } from "lucide-react";
 import { fmtDate, fmtAED, nextNumber, computeTotals } from "@/lib/nxs";
 
@@ -24,8 +26,7 @@ export default function Invoices() {
   const fields: FormFieldDef[] = [
     { name: "invoice_number", label: "Invoice No.", required: true },
     { name: "invoice_type", label: "Type", type: "select", required: true, options: ["advance", "progressive", "final", "standard"].map((s) => ({ value: s, label: s })) },
-    { name: "client_id", label: "Client", type: "select", required: true, options: (clients || []).map((c: any) => ({ value: c.id, label: c.name })) },
-    { name: "project_id", label: "Project", type: "select", options: (projects || []).map((p: any) => ({ value: p.id, label: p.name })) },
+    // client_id + project_id handled via extra (QuickAddSelect)
     { name: "invoice_date", label: "Invoice Date", type: "date" },
     { name: "due_date", label: "Due Date", type: "date" },
     { name: "status", label: "Status", type: "select", options: ["draft", "sent", "partial", "paid", "overdue", "cancelled"].map((s) => ({ value: s, label: s })) },
@@ -57,7 +58,31 @@ export default function Invoices() {
       <FormDialog open={open} onClose={() => setOpen(false)} title={editing?.id ? "Edit Invoice" : "New Invoice"}
         fields={fields} initial={editing} saving={save.isPending}
         onSave={(v) => { const t = computeTotals(v.items || []); save.mutate({ ...v, subtotal: t.subtotal, vat_amount: t.vat, total_amount: t.total }, { onSuccess: () => setOpen(false) }); }}
-        extra={(values, set) => <LineItemsEditor items={values.items || []} onChange={(items) => set({ ...values, items })} />} />
+        extra={(values, set) => (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label>Client *</Label>
+                <QuickAddSelect
+                  type="client"
+                  options={(clients || []).map((c: any) => ({ value: c.id, label: c.name }))}
+                  value={values.client_id || ""}
+                  onChange={(v) => set({ ...values, client_id: v })}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Project</Label>
+                <QuickAddSelect
+                  type="project"
+                  options={(projects || []).map((p: any) => ({ value: p.id, label: p.name }))}
+                  value={values.project_id || ""}
+                  onChange={(v) => set({ ...values, project_id: v })}
+                />
+              </div>
+            </div>
+            <LineItemsEditor items={values.items || []} onChange={(items) => set({ ...values, items })} />
+          </div>
+        )} />
 
       {printing && (
         <PrintDialog open={!!printing} onClose={() => setPrinting(null)} title={`Invoice ${printing.invoice_number}`}>
