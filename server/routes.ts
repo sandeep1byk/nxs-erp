@@ -4,7 +4,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import supabase from "./supabase";
 
-const JWT_SECRET = process.env.JWT_SECRET || "nxs-erp-jwt-2026-ba154e9b77446328072cba7bcd2426548a11499a";
+const JWT_SECRET = process.env.JWT_SECRET || "";
 
 
 interface AuthedRequest extends Request {
