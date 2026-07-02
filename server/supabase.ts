@@ -6,9 +6,8 @@ if (!(globalThis as any).WebSocket) {
 
 import { createClient } from "@supabase/supabase-js";
 
-// Fallback values baked in for published sandbox environment
-const supabaseUrl = process.env.SUPABASE_URL || "";
-const supabaseKey = process.env.SUPABASE_ANON_KEY || "";
+const supabaseUrl = process.env.SUPABASE_URL || "https://placeholder.supabase.co";
+const supabaseKey = process.env.SUPABASE_ANON_KEY || "placeholder-key";
 
 const supabase = createClient(supabaseUrl, supabaseKey, {
   auth: { persistSession: false, autoRefreshToken: false },
