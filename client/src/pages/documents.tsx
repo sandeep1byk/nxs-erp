@@ -9,7 +9,21 @@ import { fmtDate } from "@/lib/nxs";
 import { useAuth } from "@/lib/auth";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-const CATEGORIES = ["client_lpo", "supplier_invoice", "signed_invoice", "contract", "other"];
+const CATEGORIES = [
+  "client_lpo",
+  "supplier_invoice",
+  "signed_invoice",
+  "contract",
+  "passport",
+  "visa",
+  "emirates_id",
+  "labour_card",
+  "medical_card",
+  "vehicle_mulkiya",
+  "vehicle_insurance",
+  "vehicle_inspection",
+  "other",
+];
 
 export default function Documents() {
   const { user } = useAuth();

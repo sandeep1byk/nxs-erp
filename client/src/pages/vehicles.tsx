@@ -2,6 +2,7 @@ import { useState } from "react";
 import { PageHeader, useList, useSave, useRemove } from "@/components/common";
 import { DataTable } from "@/components/data-table";
 import { FormDialog, FormFieldDef } from "@/components/crud-kit";
+import { DocUploader, DocSlot } from "@/components/doc-uploader";
 import { Button } from "@/components/ui/button";
 import { Plus } from "lucide-react";
 import { fmtDate } from "@/lib/nxs";
@@ -24,7 +25,15 @@ const FIELDS: FormFieldDef[] = [
   { name: "registration_expiry", label: "Registration Expiry", type: "date" },
   { name: "insurance_expiry", label: "Insurance Expiry", type: "date" },
   { name: "assigned_to", label: "Assigned To" },
-  { name: "mulkiya_file_url", label: "Mulkiya File URL", col: 2 },
+  { name: "notes", label: "Notes", type: "textarea" },
+];
+
+// Document slots for vehicle
+const VEH_DOC_SLOTS: DocSlot[] = [
+  { key: "mulkiya", label: "Mulkiya (Registration Card)", doc_category: "vehicle_mulkiya", expiryField: "registration_expiry" },
+  { key: "insurance", label: "Insurance Certificate", doc_category: "vehicle_insurance", expiryField: "insurance_expiry" },
+  { key: "inspection", label: "Vehicle Inspection", doc_category: "vehicle_inspection" },
+  { key: "other", label: "Other Document", doc_category: "other" },
 ];
 
 export default function Vehicles() {
@@ -33,12 +42,30 @@ export default function Vehicles() {
   const remove = useRemove("vehicles");
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<any>(null);
+  const [autoFill, setAutoFill] = useState<Record<string, string>>({});
+
+  function handleUploaded(slot: DocSlot, _doc: any, expiryDate?: string) {
+    if (slot.expiryField && expiryDate) {
+      setAutoFill((prev) => ({ ...prev, [slot.expiryField!]: expiryDate }));
+    }
+  }
+
+  const editingWithAutoFill = { ...editing, ...autoFill };
 
   return (
     <div>
-      <PageHeader title="Vehicles" subtitle="Fleet with registration & insurance expiry tracking"
-        actions={<Button onClick={() => { setEditing({ status: "active" }); setOpen(true); }}><Plus className="h-4 w-4 mr-1" /> New Vehicle</Button>} />
-      <DataTable rows={data} loading={isLoading}
+      <PageHeader
+        title="Vehicles"
+        subtitle="Fleet with registration & insurance expiry tracking"
+        actions={
+          <Button onClick={() => { setEditing({ status: "active" }); setAutoFill({}); setOpen(true); }}>
+            <Plus className="h-4 w-4 mr-1" /> New Vehicle
+          </Button>
+        }
+      />
+      <DataTable
+        rows={data}
+        loading={isLoading}
         columns={[
           { header: "Plate", cell: (r: any) => <span className="font-medium">{r.plate_number}</span> },
           { header: "Vehicle", cell: (r: any) => `${r.make || ""} ${r.model || ""} ${r.year || ""}`.trim() || "—" },
@@ -47,11 +74,28 @@ export default function Vehicles() {
           { header: "Insurance Exp.", cell: (r: any) => <ExpiryCell date={r.insurance_expiry} /> },
           { header: "Assigned", cell: (r: any) => r.assigned_to || "—" },
         ]}
-        onEdit={(r) => { setEditing(r); setOpen(true); }}
-        onDelete={(r) => remove.mutate(r.id)} />
-      <FormDialog open={open} onClose={() => setOpen(false)} title={editing?.id ? "Edit Vehicle" : "New Vehicle"}
-        fields={FIELDS} initial={editing} saving={save.isPending}
-        onSave={(v) => save.mutate(v, { onSuccess: () => setOpen(false) })} />
+        onEdit={(r) => { setEditing(r); setAutoFill({}); setOpen(true); }}
+        onDelete={(r) => remove.mutate(r.id)}
+      />
+
+      <FormDialog
+        open={open}
+        onClose={() => setOpen(false)}
+        title={editing?.id ? "Edit Vehicle" : "New Vehicle"}
+        fields={FIELDS}
+        initial={editingWithAutoFill}
+        saving={save.isPending}
+        onSave={(v) => save.mutate(v, { onSuccess: () => { setOpen(false); setAutoFill({}); } })}
+        extra={() => (
+          <DocUploader
+            slots={VEH_DOC_SLOTS}
+            entityType="vehicle"
+            entityId={editing?.id}
+            entityLabel={editing?.plate_number ? `${editing.plate_number} — ${editing.make || ""} ${editing.model || ""}`.trim() : undefined}
+            onUploaded={handleUploaded}
+          />
+        )}
+      />
     </div>
   );
 }

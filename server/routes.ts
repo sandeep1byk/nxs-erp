@@ -2,7 +2,11 @@ import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "node:http";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import multer from "multer";
 import supabase from "./supabase";
+
+// ---- file upload (Supabase Storage) ----------------------------------------
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
 const JWT_SECRET = process.env.JWT_SECRET || "";
 
@@ -379,6 +383,60 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   registerCrud(app, "bank_statements", "bank_statements");
   registerCrud(app, "bank_transactions", "bank_transactions");
   registerCrud(app, "expense_categories", "expense_categories", { orderBy: "name", ascending: true });
+
+  // ---- File upload to Supabase Storage → auto-save to document_vault --------
+  app.post("/api/upload", auth, upload.single("file"), async (req: AuthedRequest, res) => {
+    try {
+      const file = (req as any).file;
+      if (!file) return res.status(400).json({ message: "No file provided" });
+
+      const { entity_type, entity_id, doc_category, title, expiry_date, notes } = req.body;
+      const folder = entity_type ? `${entity_type}/${entity_id || "misc"}` : "misc";
+      const uniqueName = `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+      const storagePath = `${folder}/${uniqueName}`;
+
+      // Upload to Supabase storage
+      const { error: uploadErr } = await supabase.storage
+        .from("nxs-documents")
+        .upload(storagePath, file.buffer, { contentType: file.mimetype, upsert: false });
+
+      if (uploadErr) return res.status(500).json({ message: uploadErr.message });
+
+      // Build public URL
+      const { data: urlData } = supabase.storage.from("nxs-documents").getPublicUrl(storagePath);
+      const fileUrl = urlData.publicUrl;
+
+      // Auto-save to document_vault
+      const vaultPayload: any = {
+        title: title || file.originalname,
+        doc_category: doc_category || "other",
+        file_name: file.originalname,
+        file_url: fileUrl,
+        doc_date: new Date().toISOString().slice(0, 10),
+        uploaded_by: req.user?.id,
+        notes: notes || null,
+      };
+      if (expiry_date) vaultPayload.expiry_date = expiry_date;
+      if (entity_type === "employee" && entity_id) vaultPayload.employee_id = entity_id;
+      if (entity_type === "vehicle" && entity_id) vaultPayload.vehicle_id = entity_id;
+      if (entity_type === "sales_order" && entity_id) vaultPayload.reference_number = entity_id;
+
+      const { data: vaultDoc, error: vaultErr } = await supabase
+        .from("document_vault")
+        .insert(vaultPayload)
+        .select()
+        .single();
+
+      if (vaultErr) {
+        // Vault save failed — still return the URL so the record can be saved
+        console.error("Vault save failed:", vaultErr.message);
+      }
+
+      res.json({ url: fileUrl, vault_id: vaultDoc?.id, file_name: file.originalname });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
 
   return httpServer;
 }

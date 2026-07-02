@@ -2,9 +2,18 @@ import { useState } from "react";
 import { PageHeader, useList, useSave, useRemove, StatusBadge } from "@/components/common";
 import { DataTable } from "@/components/data-table";
 import { FormDialog, FormFieldDef } from "@/components/crud-kit";
+import { DocUploader, DocSlot } from "@/components/doc-uploader";
 import { Button } from "@/components/ui/button";
 import { Plus } from "lucide-react";
 import { fmtDate, fmtAED, nextNumber } from "@/lib/nxs";
+
+// LPO + contract document slots for a sales order
+const SO_DOC_SLOTS: DocSlot[] = [
+  { key: "client_lpo", label: "Client LPO", doc_category: "client_lpo" },
+  { key: "signed_contract", label: "Signed Contract", doc_category: "contract" },
+  { key: "signed_invoice", label: "Signed Invoice / Delivery Note", doc_category: "signed_invoice" },
+  { key: "other", label: "Other Document", doc_category: "other" },
+];
 
 export default function SalesOrders() {
   const { data, isLoading } = useList("sales_orders");
@@ -32,9 +41,21 @@ export default function SalesOrders() {
 
   return (
     <div>
-      <PageHeader title="Sales Orders / Contracts" subtitle="Confirmed client contracts"
-        actions={<Button onClick={() => { setEditing({ so_number: nextNumber("NXS-SO"), order_date: new Date().toISOString().slice(0, 10), status: "draft" }); setOpen(true); }}><Plus className="h-4 w-4 mr-1" /> New Sales Order</Button>} />
-      <DataTable rows={data} loading={isLoading}
+      <PageHeader
+        title="Sales Orders / Contracts"
+        subtitle="Confirmed client contracts with LPO document upload"
+        actions={
+          <Button onClick={() => {
+            setEditing({ so_number: nextNumber("NXS-SO"), order_date: new Date().toISOString().slice(0, 10), status: "draft" });
+            setOpen(true);
+          }}>
+            <Plus className="h-4 w-4 mr-1" /> New Sales Order
+          </Button>
+        }
+      />
+      <DataTable
+        rows={data}
+        loading={isLoading}
         columns={[
           { header: "SO No.", cell: (r: any) => <span className="font-mono text-xs">{r.so_number}</span> },
           { header: "Client", cell: (r: any) => clientName(r.client_id) },
@@ -43,10 +64,27 @@ export default function SalesOrders() {
           { header: "Value", cell: (r: any) => fmtAED(r.contract_value) },
           { header: "Status", cell: (r: any) => <StatusBadge status={r.status} /> },
         ]}
-        onEdit={(r) => { setEditing(r); setOpen(true); }} onDelete={(r) => remove.mutate(r.id)} />
-      <FormDialog open={open} onClose={() => setOpen(false)} title={editing?.id ? "Edit Sales Order" : "New Sales Order"}
-        fields={fields} initial={editing} saving={save.isPending}
-        onSave={(v) => save.mutate(v, { onSuccess: () => setOpen(false) })} />
+        onEdit={(r) => { setEditing(r); setOpen(true); }}
+        onDelete={(r) => remove.mutate(r.id)}
+      />
+
+      <FormDialog
+        open={open}
+        onClose={() => setOpen(false)}
+        title={editing?.id ? "Edit Sales Order" : "New Sales Order"}
+        fields={fields}
+        initial={editing}
+        saving={save.isPending}
+        onSave={(v) => save.mutate(v, { onSuccess: () => setOpen(false) })}
+        extra={(values) => (
+          <DocUploader
+            slots={SO_DOC_SLOTS}
+            entityType="sales_order"
+            entityId={editing?.id || values?.so_number}
+            entityLabel={`${values?.so_number || "SO"} — ${clientName(values?.client_id)}`}
+          />
+        )}
+      />
     </div>
   );
 }
