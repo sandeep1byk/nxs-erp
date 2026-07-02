@@ -30,6 +30,7 @@ import Accounts from "@/pages/accounts";
 import Journal from "@/pages/journal";
 import Bank from "@/pages/bank";
 import Documents from "@/pages/documents";
+import FinanceQuickEntry from "@/pages/finance-quick-entry";
 
 function AppRouter() {
   return (
@@ -56,6 +57,7 @@ function AppRouter() {
         <Route path="/journal" component={Journal} />
         <Route path="/bank" component={Bank} />
         <Route path="/documents" component={Documents} />
+        <Route path="/finance-quick-entry" component={FinanceQuickEntry} />
         <Route component={NotFound} />
       </Switch>
     </AppLayout>

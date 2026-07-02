@@ -304,25 +304,41 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // PAYROLL generation
+  // OT formula: monthly mandatory hrs = 9 × 26 = 234
+  // OT rate = basic_salary / 234 * 1.5
+  // Only sum OT hours from current month timesheets
+  const MONTHLY_MANDATORY_HRS = 234;
   app.post("/api/payroll/generate", auth, requireRole("accountant"), async (req, res) => {
     const { month, year } = req.body || {};
     if (!month || !year) return res.status(400).json({ message: "month and year required" });
     const { data: emps } = await supabase.from("employees").select("*").eq("status", "active");
-    const { data: ts } = await supabase.from("timesheets").select("*");
+    // Filter timesheets for this month only
+    const monthStart = `${year}-${String(month).padStart(2,'0')}-01`;
+    const nextMonth = month === 12 ? 1 : month + 1;
+    const nextYear = month === 12 ? Number(year) + 1 : Number(year);
+    const monthEnd = `${nextYear}-${String(nextMonth).padStart(2,'0')}-01`;
+    const { data: ts } = await supabase.from("timesheets").select("*")
+      .gte("work_date", monthStart).lt("work_date", monthEnd);
     const rows: any[] = [];
     for (const e of emps || []) {
-      const ot = (ts || []).filter((t: any) => t.employee_id === e.id).reduce((s: number, t: any) => s + (Number(t.hours_overtime) || 0), 0);
+      // Sum overtime hours for this employee this month
+      const otHours = (ts || []).filter((t: any) => t.employee_id === e.id)
+        .reduce((s: number, t: any) => s + (Number(t.hours_overtime) || 0), 0);
       const basic = Number(e.basic_salary) || 0;
-      const hourly = basic / 30 / 8;
-      const overtimePay = Math.round(ot * hourly * 1.25);
+      // OT rate = basic / 234 mandatory hrs × 1.5
+      const otRate = basic / MONTHLY_MANDATORY_HRS * 1.5;
+      const overtimePay = Math.round(otHours * otRate * 100) / 100;
       const housing = Number(e.housing_allowance) || 0;
       const transport = Number(e.transport_allowance) || 0;
       const other = Number(e.other_allowance) || 0;
       const net = basic + housing + transport + other + overtimePay;
       rows.push({
         employee_id: e.id, month, year, basic_salary: basic, housing_allowance: housing,
-        transport_allowance: transport, other_allowance: other, overtime_pay: overtimePay,
-        deductions: 0, net_salary: net, status: "draft",
+        transport_allowance: transport, other_allowance: other,
+        overtime_hours: Math.round(otHours * 100) / 100,
+        overtime_pay: overtimePay,
+        special_bonus: 0, medical_leave_days: 0, annual_leave_days: 0, leave_deduction: 0,
+        deductions: 0, net_salary: Math.round(net * 100) / 100, status: "draft",
       });
     }
     // remove existing drafts for the period
@@ -404,6 +420,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   registerCrud(app, "document_vault", "document_vault");
   registerCrud(app, "bank_statements", "bank_statements");
   registerCrud(app, "bank_transactions", "bank_transactions");
+  registerCrud(app, "expense_categories", "expense_categories", { orderBy: "name", ascending: true });
 
   return httpServer;
 }
