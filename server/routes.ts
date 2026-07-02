@@ -385,6 +385,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   registerCrud(app, "bank_statements", "bank_statements");
   registerCrud(app, "bank_transactions", "bank_transactions");
   registerCrud(app, "expense_categories", "expense_categories", { orderBy: "name", ascending: true });
+  registerCrud(app, "counterparty_rules", "counterparty_rules", { orderBy: "name", ascending: true });
 
   // ---- File upload to Supabase Storage → auto-save to document_vault --------
   app.post("/api/upload", auth, upload.single("file"), async (req: AuthedRequest, res) => {
