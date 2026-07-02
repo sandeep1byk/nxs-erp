@@ -21,7 +21,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useQuery } from "@tanstack/react-query";
 import { fmtDate, fmtAED, COMPANY } from "@/lib/nxs";
-import { Upload, CheckCircle, FileSpreadsheet, Loader2, Plus, Download, FileText, BookOpen } from "lucide-react";
+import { Upload, CheckCircle, FileSpreadsheet, Loader2, Plus, Download, FileText, BookOpen, EyeOff, RotateCcw } from "lucide-react";
 import * as XLSX from "xlsx";
 
 // ── Main category definitions ─────────────────────────────────────────────────
@@ -104,7 +104,7 @@ function parseStatementFile(text: string): RawTxn[] {
 }
 
 // ── Filter bar (reusable) ─────────────────────────────────────────────────────
-interface Filters { dateFrom: string; dateTo: string; direction: "all"|"debit"|"credit"; }
+interface Filters { dateFrom: string; dateTo: string; direction: "all"|"debit"|"credit"; keyword: string; }
 function FilterBar({ filters, onChange }: { filters: Filters; onChange: (f: Filters) => void }) {
   return (
     <div className="flex flex-wrap items-end gap-3 mb-3 p-3 bg-muted/30 rounded-lg border">
@@ -129,10 +129,16 @@ function FilterBar({ filters, onChange }: { filters: Filters; onChange: (f: Filt
           </SelectContent>
         </Select>
       </div>
-      {(filters.dateFrom || filters.dateTo || filters.direction !== "all") && (
+      <div className="space-y-1 flex-1 min-w-40">
+        <Label className="text-xs">Search Keywords</Label>
+        <Input type="text" className="h-8 text-xs" placeholder="e.g. DEWA, salary, Raju..."
+          value={filters.keyword}
+          onChange={e => onChange({ ...filters, keyword: e.target.value })} />
+      </div>
+      {(filters.dateFrom || filters.dateTo || filters.direction !== "all" || filters.keyword) && (
         <Button variant="ghost" size="sm" className="h-8 text-xs mt-5"
-          onClick={() => onChange({ dateFrom: "", dateTo: "", direction: "all" })}>
-          Clear Filters
+          onClick={() => onChange({ dateFrom: "", dateTo: "", direction: "all", keyword: "" })}>
+          Clear All
         </Button>
       )}
     </div>
@@ -140,12 +146,21 @@ function FilterBar({ filters, onChange }: { filters: Filters; onChange: (f: Filt
 }
 
 function applyFilters(rows: any[], filters: Filters) {
+  const kw = (filters.keyword || "").toLowerCase().trim();
   return rows.filter((t: any) => {
     const d = (t.txn_date || t.date || "").slice(0, 10);
     if (filters.dateFrom && d < filters.dateFrom) return false;
     if (filters.dateTo   && d > filters.dateTo)   return false;
     if (filters.direction === "debit"  && !((t.debit  || 0) > 0)) return false;
     if (filters.direction === "credit" && !((t.credit || 0) > 0)) return false;
+    if (kw) {
+      const haystack = [
+        t.description, t.narration, t.notes, t.counterparty, t.reference,
+        t.txn_date, t.date, String(t.debit||""), String(t.credit||""),
+        t.account_name, t.account_code,
+      ].join(" ").toLowerCase();
+      if (!haystack.includes(kw)) return false;
+    }
     return true;
   });
 }
@@ -582,7 +597,10 @@ function LedgerTab() {
 
   const [ledgerType, setLedgerType] = useState<"bank"|"account"|"client">("bank");
   const [selectedId, setSelectedId] = useState<string>("");
-  const [filters, setFilters] = useState<Filters>({ dateFrom: "", dateTo: "", direction: "all" });
+  const [filters, setFilters] = useState<Filters>({ dateFrom: "", dateTo: "", direction: "all", keyword: "" });
+  // Temp-hide: set of row indices (within ledgerRows) that are hidden
+  const [hiddenRows, setHiddenRows] = useState<Set<number>>(new Set());
+  const [checkedRows, setCheckedRows] = useState<Set<number>>(new Set());
 
   // Build ledger rows based on type
   let ledgerRows: any[] = [];
@@ -673,7 +691,7 @@ function LedgerTab() {
       <div className="flex flex-wrap items-end gap-3 mb-3 p-3 bg-muted/30 rounded-lg border">
         <div className="space-y-1">
           <Label className="text-xs">Ledger Type</Label>
-          <Select value={ledgerType} onValueChange={v => { setLedgerType(v as any); setSelectedId(""); }}>
+          <Select value={ledgerType} onValueChange={v => { setLedgerType(v as any); setSelectedId(""); setHiddenRows(new Set()); setCheckedRows(new Set()); }}>
             <SelectTrigger className="h-8 text-xs w-44"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="bank">Bank Statement</SelectItem>
@@ -730,11 +748,11 @@ function LedgerTab() {
         {(selectedId || ledgerType === "bank") && ledgerRows.length > 0 && (
           <div className="flex gap-2 ml-auto">
             <Button size="sm" variant="outline" className="h-8 text-xs gap-1.5"
-              onClick={() => exportExcel(ledgerRows, ledgerTitle, LEDGER_COLS)}>
+              onClick={() => exportExcel(ledgerRows.filter((_,i)=>!hiddenRows.has(i)), ledgerTitle, LEDGER_COLS)}>
               <Download className="h-3.5 w-3.5" />Excel
             </Button>
             <Button size="sm" variant="outline" className="h-8 text-xs gap-1.5"
-              onClick={() => exportPDF(ledgerRows, ledgerTitle, LEDGER_COLS, ledgerSubtitle)}>
+              onClick={() => exportPDF(ledgerRows.filter((_,i)=>!hiddenRows.has(i)), ledgerTitle, LEDGER_COLS, ledgerSubtitle)}>
               <FileText className="h-3.5 w-3.5" />PDF
             </Button>
           </div>
@@ -767,10 +785,40 @@ function LedgerTab() {
           No entries found for the selected filters.
         </div>
       ) : (
-        <div className="border rounded-lg overflow-auto">
+        <>
+          {/* Temp-hide toolbar */}
+          {(checkedRows.size > 0 || hiddenRows.size > 0) && (
+            <div className="flex items-center gap-2 mb-2 flex-wrap">
+              {checkedRows.size > 0 && (
+                <Button size="sm" variant="outline" className="h-7 text-xs gap-1 text-red-600 border-red-200 hover:bg-red-50"
+                  onClick={() => {
+                    setHiddenRows(prev => { const n = new Set(prev); checkedRows.forEach(idx => n.add(idx)); return n; });
+                    setCheckedRows(new Set());
+                  }}>
+                  <EyeOff className="h-3.5 w-3.5" />Hide {checkedRows.size} row(s)
+                </Button>
+              )}
+              {hiddenRows.size > 0 && (
+                <Button size="sm" variant="outline" className="h-7 text-xs gap-1"
+                  onClick={() => { setHiddenRows(new Set()); setCheckedRows(new Set()); }}>
+                  <RotateCcw className="h-3.5 w-3.5" />Restore all ({hiddenRows.size} hidden)
+                </Button>
+              )}
+              <span className="text-xs text-muted-foreground">Check rows and hide to temporarily remove them — they come back with Restore.</span>
+            </div>
+          )}
+          <div className="border rounded-lg overflow-auto">
           <table className="w-full text-xs">
             <thead className="bg-muted/50 border-b">
               <tr>
+                <th className="px-2 py-2 w-6">
+                  <input type="checkbox" className="h-3 w-3 cursor-pointer"
+                    onChange={e => {
+                      if (e.target.checked) {
+                        setCheckedRows(new Set(ledgerRows.map((_,i)=>i).filter(i=>!hiddenRows.has(i))));
+                      } else setCheckedRows(new Set());
+                    }} />
+                </th>
                 {LEDGER_COLS.map(c => (
                   <th key={c.key} className={`px-3 py-2 font-semibold whitespace-nowrap ${c.key === "debit" || c.key === "credit" || c.key === "balance" ? "text-right" : "text-left"}`}>
                     {c.label}
@@ -779,26 +827,36 @@ function LedgerTab() {
               </tr>
             </thead>
             <tbody>
-              {ledgerRows.map((r, i) => (
-                <tr key={i} className={`border-b ${r.status === "Reconciled" ? "bg-green-50/30 dark:bg-green-900/10" : ""}`}>
-                  <td className="px-3 py-2 whitespace-nowrap">{r.date}</td>
-                  <td className="px-3 py-2" style={{ maxWidth: 280, wordBreak: "break-word" }}>{r.description}</td>
-                  <td className="px-3 py-2 text-muted-foreground">{r.reference}</td>
-                  <td className="px-3 py-2">{r.counterparty}</td>
-                  <td className="px-3 py-2 text-right font-medium text-red-600">{r.debit}</td>
-                  <td className="px-3 py-2 text-right font-medium text-green-600">{r.credit}</td>
-                  <td className="px-3 py-2 text-right text-muted-foreground">{r.balance}</td>
-                  <td className="px-3 py-2">
-                    <span className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full font-medium ${r.status === "Reconciled" ? "bg-green-100 text-green-700 dark:bg-green-900/30" : "bg-amber-100 text-amber-700 dark:bg-amber-900/30"}`}>
-                      {r.status === "Reconciled" && <CheckCircle className="h-2.5 w-2.5" />}
-                      {r.status}
-                    </span>
-                  </td>
-                </tr>
-              ))}
+              {ledgerRows.map((r, i) => {
+                if (hiddenRows.has(i)) return null;
+                const isChecked = checkedRows.has(i);
+                return (
+                  <tr key={i} className={`border-b cursor-pointer ${isChecked ? "bg-primary/5 dark:bg-primary/10" : r.status === "Reconciled" ? "bg-green-50/30 dark:bg-green-900/10" : "hover:bg-muted/30"}`}
+                    onClick={() => setCheckedRows(prev => { const n = new Set(prev); isChecked ? n.delete(i) : n.add(i); return n; })}>
+                    <td className="px-2 py-2" onClick={e => e.stopPropagation()}>
+                      <input type="checkbox" className="h-3 w-3 cursor-pointer" checked={isChecked}
+                        onChange={e => setCheckedRows(prev => { const n = new Set(prev); e.target.checked ? n.add(i) : n.delete(i); return n; })} />
+                    </td>
+                    <td className="px-3 py-2 whitespace-nowrap">{r.date}</td>
+                    <td className="px-3 py-2" style={{ maxWidth: 280, wordBreak: "break-word" }}>{r.description}</td>
+                    <td className="px-3 py-2 text-muted-foreground">{r.reference}</td>
+                    <td className="px-3 py-2">{r.counterparty}</td>
+                    <td className="px-3 py-2 text-right font-medium text-red-600">{r.debit}</td>
+                    <td className="px-3 py-2 text-right font-medium text-green-600">{r.credit}</td>
+                    <td className="px-3 py-2 text-right text-muted-foreground">{r.balance}</td>
+                    <td className="px-3 py-2">
+                      <span className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full font-medium ${r.status === "Reconciled" ? "bg-green-100 text-green-700 dark:bg-green-900/30" : "bg-amber-100 text-amber-700 dark:bg-amber-900/30"}`}>
+                        {r.status === "Reconciled" && <CheckCircle className="h-2.5 w-2.5" />}
+                        {r.status}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
+        </>
       )}
     </div>
   );
@@ -812,7 +870,7 @@ export default function Bank() {
 
   const [uploadOpen, setUploadOpen]   = useState(false);
   const [filterStmt, setFilterStmt]   = useState<string>("all");
-  const [txnFilters, setTxnFilters]   = useState<Filters>({ dateFrom: "", dateTo: "", direction: "all" });
+  const [txnFilters, setTxnFilters]   = useState<Filters>({ dateFrom: "", dateTo: "", direction: "all", keyword: "" });
 
   const allTxns = (txnsAll.data || []).filter((t: any) => filterStmt === "all" || t.statement_id === filterStmt);
   const filteredTxns = applyFilters(allTxns, txnFilters);
@@ -854,7 +912,7 @@ export default function Bank() {
             )}
           </div>
 
-          {/* Date + direction filters */}
+          {/* Date + direction + keyword filters */}
           <FilterBar filters={txnFilters} onChange={setTxnFilters} />
 
           {filteredTxns.length === 0 && !txnsAll.isLoading ? (
