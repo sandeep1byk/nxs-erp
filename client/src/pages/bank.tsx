@@ -1,10 +1,7 @@
 /**
  * Bank Reconciliation — rebuilt with proper file upload
- *
- * Flow:
- * 1. Click "Upload Statement" → pick a CSV/Excel file from your computer
- * 2. System reads each row and shows it as a transaction line
- * 3. For each line: fill counterparty, link to project/account, click Reconcile
+ * Handles ENBD CSV format (2 info rows, then header row, then data)
+ * and standard single-header-row CSV formats.
  */
 import { useState, useRef } from "react";
 import { PageHeader, useList, useSave, StatusBadge } from "@/components/common";
@@ -15,19 +12,16 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useMutation } from "@tanstack/react-query";
 import { fmtDate, fmtAED } from "@/lib/nxs";
 import {
   Upload, CheckCircle, FileSpreadsheet, Loader2,
-  AlertCircle, Plus, ArrowDownCircle, ArrowUpCircle
+  ArrowDownCircle, ArrowUpCircle
 } from "lucide-react";
 
-// ---- Helpers ----------------------------------------------------------------
+// ---- CSV helpers ------------------------------------------------------------
 function parseCsvLine(line: string, delim: string): string[] {
   const cols: string[] = [];
   let cur = "";
@@ -48,18 +42,17 @@ function parseAmount(s: string): number {
 
 function parseDate(s: string): string {
   if (!s) return "";
-  // DD/MM/YYYY or DD-MM-YYYY
-  const dmy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  s = s.trim();
+  // DD-MM-YYYY or DD/MM/YYYY  →  YYYY-MM-DD
+  const dmy = s.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{2,4})$/);
   if (dmy) {
     const y = dmy[3].length === 2 ? `20${dmy[3]}` : dmy[3];
     return `${y}-${dmy[2].padStart(2, "0")}-${dmy[1].padStart(2, "0")}`;
   }
-  // YYYY-MM-DD already
   if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
   return s;
 }
 
-// ---- Upload & Parse statement file -----------------------------------------
 interface RawTxn {
   txn_date: string;
   description: string;
@@ -69,14 +62,42 @@ interface RawTxn {
   balance: number;
 }
 
+/**
+ * Smart parser — finds the real header row (the one with "date", "debit",
+ * "credit" etc.) even if there are metadata rows above it (like ENBD).
+ * Everything after the header row is treated as transaction data.
+ */
 function parseStatementFile(text: string): RawTxn[] {
-  const lines = text.split(/\r?\n/).filter((l) => l.trim());
-  if (lines.length < 2) return [];
+  const allLines = text.split(/\r?\n/);
 
-  const delim = lines[0].includes(";") ? ";" : lines[0].includes("\t") ? "\t" : ",";
-  const headers = parseCsvLine(lines[0], delim).map((h) => h.toLowerCase().replace(/[\s_'"]/g, ""));
+  // Detect delimiter
+  const firstNonEmpty = allLines.find((l) => l.trim()) || "";
+  const delim = firstNonEmpty.includes("\t") ? "\t"
+    : firstNonEmpty.includes(";") ? ";"
+    : ",";
 
-  // Map header index by common bank statement column names
+  // Keywords that appear in a transaction header row
+  const HEADER_KEYWORDS = ["date", "debit", "credit", "description", "narration",
+    "amount", "balance", "particulars", "reference", "withdrawal", "deposit",
+    "transaction", "remarks", "detail", "running"];
+
+  // Find the row with the most header keywords (skip up to first 40 rows)
+  let headerLineIdx = -1;
+  let bestScore = 0;
+  for (let i = 0; i < Math.min(allLines.length, 40); i++) {
+    const line = allLines[i].trim();
+    if (!line) continue;
+    const cells = parseCsvLine(line, delim).map((c) => c.toLowerCase());
+    const score = cells.reduce((s, c) =>
+      s + (HEADER_KEYWORDS.some((k) => c.includes(k)) ? 1 : 0), 0);
+    if (score > bestScore) { bestScore = score; headerLineIdx = i; }
+  }
+
+  if (headerLineIdx < 0 || bestScore < 1) return [];
+
+  const headers = parseCsvLine(allLines[headerLineIdx], delim)
+    .map((h) => h.toLowerCase().trim());
+
   const findCol = (...keys: string[]) => {
     for (const k of keys) {
       const idx = headers.findIndex((h) => h.includes(k));
@@ -85,33 +106,45 @@ function parseStatementFile(text: string): RawTxn[] {
     return -1;
   };
 
-  const dateIdx   = findCol("date", "txndate", "valuedate", "postingdate");
-  const descIdx   = findCol("description", "narration", "particulars", "details", "remarks", "memo");
-  const refIdx    = findCol("reference", "refno", "chequeno", "cheque", "txnid", "transactionid");
-  const debitIdx  = findCol("debit", "withdrawal", "dr", "payment", "paid");
-  const creditIdx = findCol("credit", "deposit", "cr", "receipt", "received");
-  const balIdx    = findCol("balance", "runningbalance", "closingbalance");
-  const amtIdx    = findCol("amount"); // some banks use a single amount column
+  // ENBD columns: Account Number, Transaction Date, Value Date, Narration,
+  //               Transaction Reference, Debit, Credit, Running Balance
+  const dateIdx   = findCol("transaction date", "date", "txndate", "valuedate", "postingdate");
+  const descIdx   = findCol("narration", "description", "particulars", "details", "remarks", "memo", "detail");
+  const refIdx    = findCol("transaction reference", "reference", "refno", "chequeno", "txnid");
+  const debitIdx  = findCol("debit", "withdrawal", "dr", "payment");
+  const creditIdx = findCol("credit", "deposit", "cr", "receipt");
+  const balIdx    = findCol("running balance", "balance", "closingbalance");
+  const amtIdx    = findCol("amount");
 
   const txns: RawTxn[] = [];
-  for (let i = 1; i < lines.length; i++) {
-    const cols = parseCsvLine(lines[i], delim);
-    if (cols.every((c) => !c)) continue; // skip blank rows
 
-    let debit = debitIdx >= 0 ? parseAmount(cols[debitIdx] || "") : 0;
+  for (let i = headerLineIdx + 1; i < allLines.length; i++) {
+    const line = allLines[i].trim();
+    if (!line) continue;
+    const cols = parseCsvLine(line, delim);
+    if (cols.every((c) => !c)) continue;
+
+    // Skip footer/total rows
+    const firstCell = (cols[0] || "").toLowerCase();
+    if (firstCell.includes("total") || firstCell.includes("opening balance")
+      || firstCell.includes("closing balance")) continue;
+
+    let debit  = debitIdx  >= 0 ? parseAmount(cols[debitIdx]  || "") : 0;
     let credit = creditIdx >= 0 ? parseAmount(cols[creditIdx] || "") : 0;
 
-    // Single amount column: negative = debit, positive = credit
+    // Single amount column
     if (debit === 0 && credit === 0 && amtIdx >= 0) {
       const amt = parseAmount(cols[amtIdx] || "");
       if (amt < 0) debit = Math.abs(amt);
-      else credit = amt;
+      else if (amt > 0) credit = amt;
     }
 
+    const rawDate     = dateIdx >= 0 ? cols[dateIdx] || "" : cols[0] || "";
     const description = descIdx >= 0 ? cols[descIdx] || "" : cols[1] || "";
-    const txn_date    = dateIdx >= 0 ? parseDate(cols[dateIdx] || "") : "";
+    const txn_date    = parseDate(rawDate);
 
-    if (!txn_date && !description && debit === 0 && credit === 0) continue;
+    // Skip rows that have no date AND no amounts — metadata / blank
+    if (!txn_date && debit === 0 && credit === 0) continue;
 
     txns.push({
       txn_date,
@@ -136,12 +169,12 @@ function UploadStatementDialog({ open, onClose, onImported }: UploadDialogProps)
   const { toast } = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const [bankName, setBankName] = useState("ENBD");
+  const [bankName, setBankName]         = useState("ENBD");
   const [accountNumber, setAccountNumber] = useState("");
   const [statementDate, setStatementDate] = useState(new Date().toISOString().slice(0, 10));
-  const [fileName, setFileName] = useState("");
-  const [txns, setTxns] = useState<RawTxn[]>([]);
-  const [saving, setSaving] = useState(false);
+  const [fileName, setFileName]         = useState("");
+  const [txns, setTxns]                 = useState<RawTxn[]>([]);
+  const [saving, setSaving]             = useState(false);
 
   function handleFile(file: File) {
     setFileName(file.name);
@@ -150,46 +183,52 @@ function UploadStatementDialog({ open, onClose, onImported }: UploadDialogProps)
       const text = e.target?.result as string;
       const parsed = parseStatementFile(text);
       if (parsed.length === 0) {
-        toast({ title: "No transactions found", description: "Make sure this is a CSV file exported from your bank.", variant: "destructive" });
+        toast({
+          title: "No transactions found",
+          description: "Make sure this is a CSV file exported from your bank.",
+          variant: "destructive",
+        });
         return;
       }
       setTxns(parsed);
-      toast({ title: `${parsed.length} transactions found`, description: "Review and click Import below." });
+      toast({ title: `${parsed.length} transactions found`, description: "Review below and click Import." });
     };
     reader.readAsText(file);
   }
 
   async function doImport() {
-    if (!bankName.trim()) { toast({ title: "Please enter the bank name", variant: "destructive" }); return; }
+    if (!bankName.trim()) {
+      toast({ title: "Please enter the bank name", variant: "destructive" });
+      return;
+    }
     setSaving(true);
     try {
-      // 1. Create statement record
+      // 1. Create statement record — only columns that exist in the DB
       const stmtRes = await apiRequest("POST", "/api/bank_statements", {
         bank_name: bankName.trim(),
         account_number: accountNumber.trim() || null,
         statement_date: statementDate,
         status: "pending",
-        file_name: fileName || null,
       });
       const stmt = await stmtRes.json();
 
-      // 2. Create all transactions linked to statement
+      // 2. Insert transactions one by one — only real DB columns
       for (const t of txns) {
         await apiRequest("POST", "/api/bank_transactions", {
           statement_id: stmt.id,
-          txn_date: t.txn_date || statementDate,
-          description: t.description,
-          reference: t.reference || null,
-          debit: t.debit || null,
-          credit: t.credit || null,
-          balance: t.balance || null,
+          txn_date:     t.txn_date || statementDate,
+          description:  t.description || null,
+          reference:    t.reference   || null,
+          debit:        t.debit  > 0 ? t.debit  : null,
+          credit:       t.credit > 0 ? t.credit : null,
+          balance:      t.balance     || null,
           is_reconciled: false,
         });
       }
 
       queryClient.invalidateQueries({ queryKey: ["/api/bank_statements"] });
       queryClient.invalidateQueries({ queryKey: ["/api/bank_transactions"] });
-      toast({ title: "Statement imported", description: `${txns.length} transactions ready to reconcile.` });
+      toast({ title: "Statement imported!", description: `${txns.length} transactions ready to reconcile.` });
       onImported(stmt.id);
       onClose();
     } catch (e: any) {
@@ -220,19 +259,22 @@ function UploadStatementDialog({ open, onClose, onImported }: UploadDialogProps)
           <div className="grid grid-cols-3 gap-3">
             <div className="space-y-1.5">
               <Label>Bank Name <span className="text-destructive">*</span></Label>
-              <Input placeholder="e.g. ENBD" value={bankName} onChange={(e) => setBankName(e.target.value)} data-testid="input-bank-name" />
+              <Input placeholder="e.g. ENBD" value={bankName}
+                onChange={(e) => setBankName(e.target.value)} data-testid="input-bank-name" />
             </div>
             <div className="space-y-1.5">
               <Label>Account Number</Label>
-              <Input placeholder="e.g. 1015777252801" value={accountNumber} onChange={(e) => setAccountNumber(e.target.value)} />
+              <Input placeholder="e.g. 1015777252801" value={accountNumber}
+                onChange={(e) => setAccountNumber(e.target.value)} />
             </div>
             <div className="space-y-1.5">
               <Label>Statement Date</Label>
-              <Input type="date" value={statementDate} onChange={(e) => setStatementDate(e.target.value)} />
+              <Input type="date" value={statementDate}
+                onChange={(e) => setStatementDate(e.target.value)} />
             </div>
           </div>
 
-          {/* File upload */}
+          {/* Drop zone */}
           <div
             className="border-2 border-dashed border-border rounded-xl p-6 text-center cursor-pointer hover:border-primary/50 hover:bg-muted/30 transition-colors"
             onClick={() => fileRef.current?.click()}
@@ -244,46 +286,62 @@ function UploadStatementDialog({ open, onClose, onImported }: UploadDialogProps)
                 <FileSpreadsheet className="h-6 w-6 text-primary" />
                 <div className="text-left">
                   <p className="font-medium text-sm">{fileName}</p>
-                  <p className="text-xs text-muted-foreground">{txns.length} transactions found — click to change file</p>
+                  <p className="text-xs text-muted-foreground">
+                    {txns.length} transactions found — click to change file
+                  </p>
                 </div>
               </div>
             ) : (
               <>
                 <Upload className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
-                <p className="font-medium text-sm mb-1">Click here to select your bank statement file</p>
-                <p className="text-xs text-muted-foreground">CSV or Excel exported from your bank (ENBD, FAB, ADIB, etc.)</p>
+                <p className="font-medium text-sm mb-1">Click here to select your bank statement CSV</p>
+                <p className="text-xs text-muted-foreground">
+                  ENBD, FAB, ADIB — any CSV exported from your bank's online banking
+                </p>
               </>
             )}
           </div>
-          <input ref={fileRef} type="file" accept=".csv,.txt,.xls,.xlsx,.tsv" className="hidden"
+          <input ref={fileRef} type="file" accept=".csv,.txt,.tsv" className="hidden"
             onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
 
-          {/* Transaction preview */}
+          {/* Preview table */}
           {txns.length > 0 && (
             <div>
-              <p className="text-sm font-medium mb-2">{txns.length} transactions — preview (first 5):</p>
+              <p className="text-sm font-medium mb-2">
+                {txns.length} transactions found — preview (first 5):
+              </p>
               <div className="border rounded-lg overflow-hidden text-sm">
                 <table className="w-full">
                   <thead className="bg-muted/50">
                     <tr>
-                      <th className="text-left px-3 py-2 font-medium">Date</th>
-                      <th className="text-left px-3 py-2 font-medium">Description</th>
-                      <th className="text-right px-3 py-2 font-medium">Debit</th>
-                      <th className="text-right px-3 py-2 font-medium">Credit</th>
+                      <th className="text-left px-3 py-2 font-medium text-xs">Date</th>
+                      <th className="text-left px-3 py-2 font-medium text-xs">Description</th>
+                      <th className="text-right px-3 py-2 font-medium text-xs">Debit</th>
+                      <th className="text-right px-3 py-2 font-medium text-xs">Credit</th>
+                      <th className="text-right px-3 py-2 font-medium text-xs">Balance</th>
                     </tr>
                   </thead>
                   <tbody>
                     {txns.slice(0, 5).map((t, i) => (
                       <tr key={i} className="border-t">
                         <td className="px-3 py-1.5 text-xs">{t.txn_date}</td>
-                        <td className="px-3 py-1.5 text-xs max-w-[200px] truncate">{t.description}</td>
-                        <td className="px-3 py-1.5 text-xs text-right text-red-600">{t.debit ? fmtAED(t.debit) : "—"}</td>
-                        <td className="px-3 py-1.5 text-xs text-right text-green-600">{t.credit ? fmtAED(t.credit) : "—"}</td>
+                        <td className="px-3 py-1.5 text-xs max-w-[200px] truncate" title={t.description}>
+                          {t.description || "—"}
+                        </td>
+                        <td className="px-3 py-1.5 text-xs text-right text-red-600">
+                          {t.debit ? fmtAED(t.debit) : "—"}
+                        </td>
+                        <td className="px-3 py-1.5 text-xs text-right text-green-600">
+                          {t.credit ? fmtAED(t.credit) : "—"}
+                        </td>
+                        <td className="px-3 py-1.5 text-xs text-right text-muted-foreground">
+                          {t.balance ? fmtAED(t.balance) : "—"}
+                        </td>
                       </tr>
                     ))}
                     {txns.length > 5 && (
                       <tr className="border-t bg-muted/30">
-                        <td colSpan={4} className="px-3 py-1.5 text-xs text-center text-muted-foreground">
+                        <td colSpan={5} className="px-3 py-1.5 text-xs text-center text-muted-foreground">
                           + {txns.length - 5} more transactions
                         </td>
                       </tr>
@@ -294,21 +352,23 @@ function UploadStatementDialog({ open, onClose, onImported }: UploadDialogProps)
             </div>
           )}
 
-          {/* How to export note */}
+          {/* How-to note */}
           {txns.length === 0 && (
             <div className="p-3 bg-muted/40 rounded-lg text-xs text-muted-foreground">
-              <p className="font-medium text-foreground mb-1">How to get the file from your bank:</p>
-              <p><strong>ENBD:</strong> Online banking → Accounts → View Statement → Export → CSV</p>
-              <p><strong>FAB / ADIB:</strong> Online banking → Statements → Download → CSV or Excel</p>
-              <p className="mt-1">Any CSV file with columns for Date, Description, Debit, Credit will work.</p>
+              <p className="font-medium text-foreground mb-1">How to export from ENBD:</p>
+              <p>Online banking → Accounts → View Statement → Download → CSV</p>
+              <p className="mt-1">The CSV file from ENBD works directly — no changes needed.</p>
             </div>
           )}
         </div>
 
         <DialogFooter>
           <Button variant="outline" onClick={() => { reset(); onClose(); }}>Cancel</Button>
-          <Button onClick={doImport} disabled={txns.length === 0 || saving} data-testid="button-import-statement">
-            {saving ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Importing…</> : <><Upload className="h-4 w-4 mr-1" /> Import {txns.length} Transactions</>}
+          <Button onClick={doImport} disabled={txns.length === 0 || saving}
+            data-testid="button-import-statement">
+            {saving
+              ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Importing…</>
+              : <><Upload className="h-4 w-4 mr-1" /> Import {txns.length} Transactions</>}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -327,18 +387,18 @@ interface ReconcileDialogProps {
 function ReconcileDialog({ txn, projects, accounts, onClose }: ReconcileDialogProps) {
   const { toast } = useToast();
   const [counterparty, setCounterparty] = useState(txn.counterparty || "");
-  const [projectId, setProjectId] = useState(txn.project_id || "");
-  const [accountId, setAccountId] = useState(txn.account_id || "");
-  const [notes, setNotes] = useState(txn.notes || "");
+  const [projectId, setProjectId]       = useState(txn.project_id  || "");
+  const [accountId, setAccountId]       = useState(txn.account_id  || "");
+  const [notes, setNotes]               = useState(txn.notes       || "");
 
   const save = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("PUT", `/api/bank_transactions/${txn.id}`, {
         ...txn,
         counterparty: counterparty || null,
-        project_id: projectId || null,
-        account_id: accountId || null,
-        notes: notes || null,
+        project_id:   projectId   || null,
+        account_id:   accountId   || null,
+        notes:        notes       || null,
         is_reconciled: true,
       });
       return res.json();
@@ -360,33 +420,43 @@ function ReconcileDialog({ txn, projects, accounts, onClose }: ReconcileDialogPr
           <DialogTitle>Reconcile Transaction</DialogTitle>
         </DialogHeader>
 
-        {/* Transaction summary */}
-        <div className={`rounded-lg p-3 mb-2 ${isDebit ? "bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800" : "bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800"}`}>
+        {/* Transaction summary card */}
+        <div className={`rounded-lg p-3 mb-1 border ${isDebit
+          ? "bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800"
+          : "bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800"}`}>
           <div className="flex items-center gap-2 mb-1">
             {isDebit
-              ? <ArrowUpCircle className="h-4 w-4 text-red-600" />
-              : <ArrowDownCircle className="h-4 w-4 text-green-600" />}
+              ? <ArrowUpCircle className="h-4 w-4 text-red-600 shrink-0" />
+              : <ArrowDownCircle className="h-4 w-4 text-green-600 shrink-0" />}
             <span className="text-sm font-medium">{isDebit ? "Money Out" : "Money In"}</span>
             <span className={`ml-auto font-bold ${isDebit ? "text-red-600" : "text-green-600"}`}>
               {fmtAED(isDebit ? txn.debit : txn.credit)}
             </span>
           </div>
-          <p className="text-xs text-muted-foreground">{txn.description}</p>
-          <p className="text-xs text-muted-foreground">{fmtDate(txn.txn_date)}{txn.reference ? ` · Ref: ${txn.reference}` : ""}</p>
+          <p className="text-xs text-muted-foreground truncate">{txn.description}</p>
+          <p className="text-xs text-muted-foreground">
+            {fmtDate(txn.txn_date)}{txn.reference ? ` · Ref: ${txn.reference}` : ""}
+          </p>
         </div>
 
         <div className="space-y-3">
           <div className="space-y-1.5">
-            <Label>Who paid / Who received? (Counterparty)</Label>
-            <Input placeholder={isDebit ? "Who did you pay?" : "Who paid you?"} value={counterparty}
-              onChange={(e) => setCounterparty(e.target.value)} data-testid="input-counterparty" autoFocus />
+            <Label>{isDebit ? "Who did you pay?" : "Who paid you?"}</Label>
+            <Input
+              placeholder={isDebit ? "Vendor / supplier name" : "Client / payer name"}
+              value={counterparty}
+              onChange={(e) => setCounterparty(e.target.value)}
+              data-testid="input-counterparty"
+              autoFocus
+            />
           </div>
           <div className="space-y-1.5">
             <Label>Link to Project (optional)</Label>
             <Select value={projectId} onValueChange={setProjectId}>
               <SelectTrigger><SelectValue placeholder="— no project —" /></SelectTrigger>
               <SelectContent>
-                {projects.map((p: any) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+                {projects.map((p: any) =>
+                  <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
@@ -395,20 +465,25 @@ function ReconcileDialog({ txn, projects, accounts, onClose }: ReconcileDialogPr
             <Select value={accountId} onValueChange={setAccountId}>
               <SelectTrigger><SelectValue placeholder="— select account —" /></SelectTrigger>
               <SelectContent>
-                {accounts.map((a: any) => <SelectItem key={a.id} value={a.id}>{a.account_code} — {a.name}</SelectItem>)}
+                {accounts.map((a: any) =>
+                  <SelectItem key={a.id} value={a.id}>{a.account_code} — {a.name}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
           <div className="space-y-1.5">
             <Label>Notes (optional)</Label>
-            <Input placeholder="Any notes about this transaction" value={notes} onChange={(e) => setNotes(e.target.value)} />
+            <Input placeholder="Any notes" value={notes}
+              onChange={(e) => setNotes(e.target.value)} />
           </div>
         </div>
 
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={() => save.mutate()} disabled={save.isPending} data-testid="button-reconcile">
-            {save.isPending ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Saving…</> : <><CheckCircle className="h-4 w-4 mr-1" /> Mark Reconciled</>}
+          <Button onClick={() => save.mutate()} disabled={save.isPending}
+            data-testid="button-reconcile">
+            {save.isPending
+              ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Saving…</>
+              : <><CheckCircle className="h-4 w-4 mr-1" /> Mark Reconciled</>}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -418,27 +493,27 @@ function ReconcileDialog({ txn, projects, accounts, onClose }: ReconcileDialogPr
 
 // ---- Main Page --------------------------------------------------------------
 export default function Bank() {
-  const stmts = useList("bank_statements");
-  const txns = useList("bank_transactions");
+  const stmts    = useList("bank_statements");
+  const txns     = useList("bank_transactions");
   const projects = useList("projects");
   const accounts = useList("accounts");
 
-  const [uploadOpen, setUploadOpen] = useState(false);
-  const [reconcile, setReconcile] = useState<any>(null);
-  const [filterStmt, setFilterStmt] = useState<string>("all");
+  const [uploadOpen, setUploadOpen]   = useState(false);
+  const [reconcile, setReconcile]     = useState<any>(null);
+  const [filterStmt, setFilterStmt]   = useState<string>("all");
 
   const filteredTxns = (txns.data || []).filter((t: any) =>
     filterStmt === "all" || t.statement_id === filterStmt
   );
 
-  const pendingCount = filteredTxns.filter((t: any) => !t.is_reconciled).length;
-  const reconciledCount = filteredTxns.filter((t: any) => t.is_reconciled).length;
+  const pendingCount    = filteredTxns.filter((t: any) => !t.is_reconciled).length;
+  const reconciledCount = filteredTxns.filter((t: any) =>  t.is_reconciled).length;
 
   return (
     <div>
       <PageHeader
         title="Bank Reconciliation"
-        subtitle="Upload your bank statement — each transaction appears line by line for you to reconcile"
+        subtitle="Upload your bank statement — each transaction appears line by line to reconcile"
         actions={
           <Button onClick={() => setUploadOpen(true)} data-testid="button-upload-statement">
             <Upload className="h-4 w-4 mr-2" /> Upload Statement
@@ -454,7 +529,6 @@ export default function Bank() {
 
         {/* TRANSACTIONS TAB */}
         <TabsContent value="txns">
-          {/* Filter + summary */}
           <div className="flex items-center gap-4 mb-4 flex-wrap">
             <div className="flex items-center gap-2">
               <Label className="text-sm shrink-0">Filter by statement:</Label>
@@ -473,7 +547,7 @@ export default function Bank() {
               </Select>
             </div>
             {filteredTxns.length > 0 && (
-              <div className="flex gap-3 ml-auto text-sm">
+              <div className="flex gap-4 ml-auto text-sm">
                 <span className="text-muted-foreground">
                   <span className="font-semibold text-amber-600">{pendingCount}</span> pending
                 </span>
@@ -488,7 +562,9 @@ export default function Bank() {
             <div className="text-center py-16 border-2 border-dashed rounded-xl">
               <FileSpreadsheet className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
               <p className="font-medium mb-1">No transactions yet</p>
-              <p className="text-sm text-muted-foreground mb-4">Upload a bank statement and each transaction will appear here</p>
+              <p className="text-sm text-muted-foreground mb-4">
+                Upload a bank statement CSV and each transaction will appear here
+              </p>
               <Button onClick={() => setUploadOpen(true)}>
                 <Upload className="h-4 w-4 mr-2" /> Upload Statement
               </Button>
@@ -506,22 +582,32 @@ export default function Bank() {
                   header: "Description",
                   cell: (r: any) => (
                     <div>
-                      <p className="text-sm truncate max-w-[200px]" title={r.description}>{r.description || "—"}</p>
-                      {r.reference && <p className="text-xs text-muted-foreground">Ref: {r.reference}</p>}
+                      <p className="text-sm max-w-xs truncate" title={r.description}>
+                        {r.description || "—"}
+                      </p>
+                      {r.reference && r.reference !== "- -" && (
+                        <p className="text-xs text-muted-foreground">Ref: {r.reference}</p>
+                      )}
                     </div>
                   )
                 },
                 {
-                  header: "Money Out (Debit)",
+                  header: "Money Out",
                   cell: (r: any) => r.debit
                     ? <span className="text-red-600 font-medium">{fmtAED(r.debit)}</span>
-                    : <span className="text-muted-foreground text-sm">—</span>
+                    : <span className="text-muted-foreground">—</span>
                 },
                 {
-                  header: "Money In (Credit)",
+                  header: "Money In",
                   cell: (r: any) => r.credit
                     ? <span className="text-green-600 font-medium">{fmtAED(r.credit)}</span>
-                    : <span className="text-muted-foreground text-sm">—</span>
+                    : <span className="text-muted-foreground">—</span>
+                },
+                {
+                  header: "Balance",
+                  cell: (r: any) => r.balance
+                    ? <span className="text-sm text-muted-foreground">{fmtAED(r.balance)}</span>
+                    : <span className="text-muted-foreground">—</span>
                 },
                 {
                   header: "Counterparty",
@@ -536,7 +622,8 @@ export default function Bank() {
                         <CheckCircle className="h-4 w-4" /> Done
                       </span>
                     : <Button size="sm" variant="outline" className="h-7 text-xs px-2"
-                        onClick={() => setReconcile(r)} data-testid={`button-reconcile-${r.id}`}>
+                        onClick={() => setReconcile(r)}
+                        data-testid={`button-reconcile-${r.id}`}>
                         Reconcile
                       </Button>
                 },
@@ -552,43 +639,36 @@ export default function Bank() {
               <Upload className="h-4 w-4 mr-2" /> Upload Statement
             </Button>
           </div>
-          {(stmts.data || []).length === 0 && !stmts.isLoading ? (
-            <div className="text-center py-12 text-muted-foreground">
-              <p>No statements uploaded yet.</p>
-            </div>
-          ) : (
-            <DataTable
-              rows={stmts.data}
-              loading={stmts.isLoading}
-              columns={[
-                { header: "Bank", cell: (r: any) => <span className="font-medium">{r.bank_name}</span> },
-                { header: "Account", cell: (r: any) => r.account_number || "—" },
-                { header: "Date", cell: (r: any) => fmtDate(r.statement_date) },
-                {
-                  header: "Transactions",
-                  cell: (r: any) => {
-                    const count = (txns.data || []).filter((t: any) => t.statement_id === r.id).length;
-                    const done  = (txns.data || []).filter((t: any) => t.statement_id === r.id && t.is_reconciled).length;
-                    return <span className="text-sm">{done}/{count} reconciled</span>;
-                  }
-                },
-                { header: "Status", cell: (r: any) => <StatusBadge status={r.status} /> },
-                {
-                  header: "",
-                  cell: (r: any) => (
-                    <Button size="sm" variant="ghost" className="text-xs"
-                      onClick={() => setFilterStmt(r.id)}>
-                      View Transactions
-                    </Button>
-                  )
-                },
-              ]}
-            />
-          )}
+          <DataTable
+            rows={stmts.data}
+            loading={stmts.isLoading}
+            columns={[
+              { header: "Bank",    cell: (r: any) => <span className="font-medium">{r.bank_name}</span> },
+              { header: "Account", cell: (r: any) => r.account_number || "—" },
+              { header: "Date",    cell: (r: any) => fmtDate(r.statement_date) },
+              {
+                header: "Transactions",
+                cell: (r: any) => {
+                  const count = (txns.data || []).filter((t: any) => t.statement_id === r.id).length;
+                  const done  = (txns.data || []).filter((t: any) => t.statement_id === r.id && t.is_reconciled).length;
+                  return <span className="text-sm">{done} / {count} reconciled</span>;
+                }
+              },
+              { header: "Status", cell: (r: any) => <StatusBadge status={r.status} /> },
+              {
+                header: "",
+                cell: (r: any) => (
+                  <Button size="sm" variant="ghost" className="text-xs"
+                    onClick={() => setFilterStmt(r.id)}>
+                    View Transactions
+                  </Button>
+                )
+              },
+            ]}
+          />
         </TabsContent>
       </Tabs>
 
-      {/* Dialogs */}
       <UploadStatementDialog
         open={uploadOpen}
         onClose={() => setUploadOpen(false)}
