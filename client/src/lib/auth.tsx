@@ -58,6 +58,7 @@ export function useAuth() {
 // Role-based nav visibility helper
 export const MODULE_ROLES: Record<string, Role[]> = {
   dashboard: ["admin", "engineer", "accountant", "storekeeper"],
+  shortcuts: ["admin", "engineer", "accountant", "storekeeper"],
   projects: ["admin", "engineer"],
   daily: ["admin", "engineer"],
   siteReports: ["admin", "engineer"],

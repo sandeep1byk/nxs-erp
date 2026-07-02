@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, Building2, ClipboardList, Users, Truck, Clock, Wallet,
   ShoppingCart, Package, FileText, Receipt, BookOpen, Landmark, HardHat,
-  FolderArchive, BellRing, LogOut, FileSignature, Handshake, Store, Zap,
+  FolderArchive, BellRing, LogOut, FileSignature, Handshake, Store, Zap, Star,
 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
@@ -15,6 +15,7 @@ interface NavGroup { title: string; items: NavItem[]; }
 const GROUPS: NavGroup[] = [
   { title: "Overview", items: [
     { key: "dashboard", label: "Dashboard", href: "/", icon: LayoutDashboard },
+    { key: "shortcuts", label: "My Shortcuts", href: "/my-shortcuts", icon: Star },
     { key: "expiry", label: "Expiry Alerts", href: "/expiry", icon: BellRing },
   ]},
   { title: "Operations", items: [

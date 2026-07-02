@@ -31,6 +31,7 @@ import Journal from "@/pages/journal";
 import Bank from "@/pages/bank";
 import Documents from "@/pages/documents";
 import FinanceQuickEntry from "@/pages/finance-quick-entry";
+import MyShortcuts from "@/pages/my-shortcuts";
 
 function AppRouter() {
   return (
@@ -58,6 +59,7 @@ function AppRouter() {
         <Route path="/bank" component={Bank} />
         <Route path="/documents" component={Documents} />
         <Route path="/finance-quick-entry" component={FinanceQuickEntry} />
+        <Route path="/my-shortcuts" component={MyShortcuts} />
         <Route component={NotFound} />
       </Switch>
     </AppLayout>
