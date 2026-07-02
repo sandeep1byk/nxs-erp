@@ -220,7 +220,7 @@ async function seedIfEmpty() {
 
 // ---- routes -----------------------------------------------------------------
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
-  await seedIfEmpty();
+  seedIfEmpty().catch(err => console.error('Seed failed (non-fatal):', err?.message || err));
 
   // AUTH
   app.post("/api/auth/login", async (req, res) => {
