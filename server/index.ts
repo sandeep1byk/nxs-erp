@@ -1,4 +1,8 @@
 import "dotenv/config";
+
+// Catch unhandled errors so Render sees them in logs
+process.on('uncaughtException', (err) => { console.error('UNCAUGHT:', err); process.exit(1); });
+process.on('unhandledRejection', (err) => { console.error('UNHANDLED:', err); });
 import express, { Response, NextFunction } from 'express';
 import type { Request } from 'express';
 import { registerRoutes } from "./routes";
@@ -96,7 +100,6 @@ app.use((req, res, next) => {
     {
       port,
       host: "0.0.0.0",
-      reusePort: true,
     },
     () => {
       log(`serving on port ${port}`);
