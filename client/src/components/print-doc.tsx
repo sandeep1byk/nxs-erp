@@ -89,48 +89,52 @@ function handlePrint(contentId: string) {
   const content = document.getElementById(contentId);
   if (!content) return;
 
-  // Create a full-page print overlay directly in the current document
-  const overlay = document.createElement("div");
-  overlay.id = "nxs-print-overlay";
-  overlay.innerHTML = content.innerHTML;
-  overlay.style.cssText = [
-    "position:fixed","top:0","left:0","width:100%","height:100%",
-    "background:#fff","color:#000","z-index:99999",
-    "font-family:Inter,Arial,sans-serif","font-size:13px",
-    "padding:20mm","box-sizing:border-box","overflow:auto",
-  ].join(";");
+  const printWindow = window.open("", "_blank", "width=900,height=700");
+  if (!printWindow) {
+    alert("Please allow pop-ups for this site to enable printing.");
+    return;
+  }
 
-  // Add print-specific style tag
-  const style = document.createElement("style");
-  style.id = "nxs-print-style";
-  style.textContent = `
-    @media print {
-      body > *:not(#nxs-print-overlay) { display: none !important; }
-      #nxs-print-overlay {
-        position: fixed !important; top: 0 !important; left: 0 !important;
-        width: 100% !important; height: auto !important;
-        background: #fff !important; color: #000 !important;
-        padding: 14mm !important; box-sizing: border-box !important;
-        font-family: Inter, Arial, sans-serif !important; font-size: 12px !important;
-        z-index: 99999 !important;
-      }
-      #nxs-print-overlay table { width: 100%; border-collapse: collapse; }
-      #nxs-print-overlay th, #nxs-print-overlay td { border: 1px solid #ccc; padding: 5px 8px; font-size: 11px; text-align: left; }
-      #nxs-print-overlay thead th { background: #0c1125 !important; color: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-      @page { size: A4; margin: 0; }
-    }
-  `;
+  printWindow.document.write(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8" />
+      <title>NXS Print</title>
+      <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: Arial, sans-serif; font-size: 12px; color: #000; background: #fff; padding: 14mm; }
+        table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+        th, td { border: 1px solid #ccc; padding: 5px 8px; font-size: 11px; text-align: left; }
+        thead th { background: #0c1125; color: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        img { max-height: 56px; }
+        @page { size: A4; margin: 10mm; }
+        @media print { body { padding: 0; } }
+      </style>
+    </head>
+    <body>
+      ${content.innerHTML}
+    </body>
+    </html>
+  `);
+  printWindow.document.close();
 
-  document.head.appendChild(style);
-  document.body.appendChild(overlay);
-
-  setTimeout(() => {
-    window.print();
+  // Wait for images to load then print
+  printWindow.onload = () => {
     setTimeout(() => {
-      document.body.removeChild(overlay);
-      document.head.removeChild(style);
+      printWindow.focus();
+      printWindow.print();
+      setTimeout(() => printWindow.close(), 1000);
     }, 500);
-  }, 300);
+  };
+
+  // Fallback if onload doesn't fire
+  setTimeout(() => {
+    if (!printWindow.closed) {
+      printWindow.focus();
+      printWindow.print();
+    }
+  }, 2000);
 }
 
 export function PrintDialog({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: ReactNode }) {
