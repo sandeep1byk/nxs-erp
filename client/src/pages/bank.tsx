@@ -24,17 +24,23 @@ import { fmtDate, fmtAED, COMPANY } from "@/lib/nxs";
 import { Upload, CheckCircle, FileSpreadsheet, Loader2, Plus, Download, FileText, BookOpen } from "lucide-react";
 import * as XLSX from "xlsx";
 
-// ── Category definitions ──────────────────────────────────────────────────────
-const CATEGORIES = [
-  { value: "client",      label: "Client / Customer",  desc: "Money received from a client",         account_code: "1100", account_name: "Accounts Receivable" },
-  { value: "supplier",    label: "Supplier / Vendor",  desc: "Payment made to a supplier",           account_code: "2000", account_name: "Accounts Payable"    },
-  { value: "utility",     label: "Utility Bill",       desc: "DEWA, ETISALAT, DU, SALIK, RTA etc.", account_code: "6200", account_name: "Utilities"            },
-  { value: "salary",      label: "Salary / Payroll",   desc: "Staff salary or wage payment",         account_code: "6000", account_name: "Salaries & Wages"    },
-  { value: "bank_charge", label: "Bank Charge / Fee",  desc: "Bank fees, VAT on bank charges",       account_code: "6300", account_name: "Office & Admin"      },
-  { value: "rent",        label: "Rent",               desc: "Office or site rent payment",          account_code: "6100", account_name: "Rent Expense"        },
-  { value: "petty_cash",  label: "Petty Cash",         desc: "Petty cash withdrawal or top-up",      account_code: "1000", account_name: "Cash & Bank"         },
-  { value: "other",       label: "Other Expense",      desc: "Any other business expense",           account_code: "6300", account_name: "Office & Admin"      },
+// ── Main category definitions ─────────────────────────────────────────────────
+// These are the fixed top-level categories. Custom sub-categories (saved in DB)
+// always belong to one of these parents.
+const MAIN_CATEGORIES = [
+  { value: "client",              label: "Client / Customer",         desc: "Money received from a client",                    account_code: "1100", account_name: "Accounts Receivable",          type: "asset"     },
+  { value: "supplier",            label: "Supplier / Vendor",         desc: "Payment to a supplier or vendor",                 account_code: "2000", account_name: "Accounts Payable",             type: "liability" },
+  { value: "temp_loan_liability", label: "Temp Loan — You Owe Them",  desc: "Cash from friend/personal — company will repay",  account_code: "2400", account_name: "Temp Loans — Payable",         type: "liability" },
+  { value: "temp_loan_asset",     label: "Temp Loan — They Owe You",  desc: "Company lent money out — to be returned",         account_code: "1600", account_name: "Temp Loans — Receivable",      type: "asset"     },
+  { value: "utility",             label: "Utility Bill",              desc: "DEWA, ETISALAT, DU, SALIK, RTA etc.",            account_code: "6200", account_name: "Utilities",                    type: "expense"   },
+  { value: "salary",              label: "Salary / Payroll",          desc: "Staff salary or wage payment",                   account_code: "6000", account_name: "Salaries & Wages",             type: "expense"   },
+  { value: "bank_charge",         label: "Bank Charge / Fee",         desc: "Bank fees, VAT on bank charges",                 account_code: "6300", account_name: "Office & Admin",               type: "expense"   },
+  { value: "rent",                label: "Rent",                      desc: "Office or site rent payment",                    account_code: "6100", account_name: "Rent Expense",                 type: "expense"   },
+  { value: "petty_cash",          label: "Petty Cash",                desc: "Petty cash withdrawal or top-up",                account_code: "1000", account_name: "Cash & Bank",                  type: "asset"     },
+  { value: "other",               label: "Other Expense",             desc: "Any other business expense",                     account_code: "6300", account_name: "Office & Admin",               type: "expense"   },
 ];
+// Kept for legacy references
+const CATEGORIES = MAIN_CATEGORIES;
 
 // ── CSV parsing helpers ───────────────────────────────────────────────────────
 function parseCsvLine(line: string, delim: string): string[] {
@@ -194,58 +200,156 @@ function exportPDF(rows: any[], title: string, columns: {key:string; label:strin
   setTimeout(() => { w.print(); }, 600);
 }
 
-// ── Category picker dialog ────────────────────────────────────────────────────
-function CategoryPickerDialog({ name, onSaved, onClose }: { name: string; onSaved: (rule: any) => void; onClose: () => void }) {
+// ── Category picker dialog ────────────────────────────────────────────────
+// Shows main categories + custom sub-categories from DB.
+// Has a “+” at the bottom to create new sub-categories under any main category.
+function CategoryPickerDialog({
+  name, onSaved, onClose
+}: { name: string; onSaved: (rule: any) => void; onClose: () => void }) {
   const { toast } = useToast();
-  const [category, setCategory] = useState("");
+
+  const { data: customCats = [] } = useQuery<any[]>({ queryKey: ["/api/custom_categories"] });
+
+  // selected = { value: mainCategoryValue | customCatId, isCustom: bool }
+  const [selected, setSelected] = useState<{ value: string; isCustom: boolean } | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // Sub-form to create a new sub-category
+  const [showAddSub, setShowAddSub] = useState(false);
+  const [subName, setSubName]       = useState("");
+  const [subParent, setSubParent]   = useState("");
+  const [savingSub, setSavingSub]   = useState(false);
+
+  function resolveAccount(sel: { value: string; isCustom: boolean }) {
+    if (sel.isCustom) {
+      const c = (customCats as any[]).find((c: any) => c.id === sel.value);
+      return c ? { category: c.parent_category, account_code: c.account_code, account_name: c.account_name, label: c.name } : null;
+    }
+    const m = MAIN_CATEGORIES.find(m => m.value === sel.value);
+    return m ? { category: m.value, account_code: m.account_code, account_name: m.account_name, label: m.label } : null;
+  }
+
   async function doSave() {
-    if (!category) { toast({ title: "Please pick a category", variant: "destructive" }); return; }
+    if (!selected) { toast({ title: "Please pick a category", variant: "destructive" }); return; }
+    const acc = resolveAccount(selected);
+    if (!acc) { toast({ title: "Invalid selection", variant: "destructive" }); return; }
     setSaving(true);
     try {
-      const cat = CATEGORIES.find(c => c.value === category)!;
       const res = await apiRequest("POST", "/api/counterparty_rules", {
-        name: name.trim(), category,
-        account_code: cat.account_code, account_name: cat.account_name,
+        name: name.trim(),
+        category: acc.category,
+        account_code: acc.account_code,
+        account_name: acc.account_name,
+        parent_category: acc.category,
       });
       const rule = await res.json();
       queryClient.invalidateQueries({ queryKey: ["/api/counterparty_rules"] });
-      toast({ title: `"${name}" saved as ${cat.label}` });
+      toast({ title: `“${name}” saved under ${acc.label}` });
       onSaved(rule);
     } catch (e: any) { toast({ title: "Error", description: e.message, variant: "destructive" }); }
     finally { setSaving(false); }
   }
 
+  async function doSaveSub() {
+    if (!subName.trim()) { toast({ title: "Enter a name for the sub-category", variant: "destructive" }); return; }
+    if (!subParent)      { toast({ title: "Choose which main category it belongs to", variant: "destructive" }); return; }
+    const parent = MAIN_CATEGORIES.find(m => m.value === subParent)!;
+    setSavingSub(true);
+    try {
+      await apiRequest("POST", "/api/custom_categories", {
+        name: subName.trim(),
+        parent_category: subParent,
+        account_code: parent.account_code,
+        account_name: parent.account_name,
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/custom_categories"] });
+      toast({ title: `Sub-category “${subName}” created` });
+      setShowAddSub(false); setSubName(""); setSubParent("");
+    } catch (e: any) { toast({ title: "Error", description: e.message, variant: "destructive" }); }
+    finally { setSavingSub(false); }
+  }
+
   return (
     <Dialog open onOpenChange={o => !o && onClose()}>
-      <DialogContent className="max-w-sm">
+      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{name ? `What is "${name}"?` : "Add Counterparty"}</DialogTitle>
+          <DialogTitle>{name ? `What is “${name}”?` : "Pick Category"}</DialogTitle>
         </DialogHeader>
-        <p className="text-sm text-muted-foreground">
-          {name
-            ? "Pick a category — the system will remember this name automatically next time."
-            : "Type the name and pick a category."}
-        </p>
-        {!name && (
-          <Input id="cp-name-input" placeholder="e.g. DEWA, Supplier ABC" className="text-sm" />
-        )}
-        <div className="space-y-2 py-1 max-h-72 overflow-y-auto">
-          {CATEGORIES.map(cat => (
-            <button key={cat.value} onClick={() => setCategory(cat.value)}
-              className={`w-full text-left rounded-lg border px-3 py-2 transition-colors ${category === cat.value ? "border-primary bg-primary/10" : "border-border hover:bg-muted/50"}`}>
-              <p className="text-sm font-medium">{cat.label}</p>
-              <p className="text-xs text-muted-foreground">{cat.desc}</p>
+        {name && <p className="text-sm text-muted-foreground -mt-2">Pick once — remembered automatically next time.</p>}
+
+        {/* Add sub-category inline form */}
+        {showAddSub ? (
+          <div className="border rounded-lg p-3 space-y-3 bg-muted/30">
+            <p className="text-sm font-semibold">Create New Sub-Category</p>
+            <div className="space-y-1">
+              <Label className="text-xs">Name</Label>
+              <Input className="text-sm" placeholder='e.g. "Temp Loan — Raju" or "Personal — Sandeep"' value={subName} onChange={e => setSubName(e.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Falls under (main category)</Label>
+              <div className="grid grid-cols-1 gap-1 max-h-48 overflow-y-auto">
+                {MAIN_CATEGORIES.map(m => (
+                  <button key={m.value} onClick={() => setSubParent(m.value)}
+                    className={`w-full text-left rounded-md border px-2.5 py-1.5 text-xs transition-colors ${subParent === m.value ? "border-primary bg-primary/10 font-semibold" : "border-border hover:bg-muted/50"}`}>
+                    {m.label}
+                    <span className="text-muted-foreground ml-1.5">→ {m.account_code} {m.account_name}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" className="flex-1" onClick={() => { setShowAddSub(false); setSubName(""); setSubParent(""); }}>Cancel</Button>
+              <Button size="sm" className="flex-1" onClick={doSaveSub} disabled={!subName.trim() || !subParent || savingSub}>
+                {savingSub ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Create"}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-1 max-h-[55vh] overflow-y-auto pr-1">
+            {MAIN_CATEGORIES.map(cat => {
+              const subs = (customCats as any[]).filter((c: any) => c.parent_category === cat.value);
+              const isMainSel = selected?.value === cat.value && !selected?.isCustom;
+              return (
+                <div key={cat.value}>
+                  <button onClick={() => setSelected({ value: cat.value, isCustom: false })}
+                    className={`w-full text-left rounded-lg border px-3 py-2 transition-colors ${isMainSel ? "border-primary bg-primary/10" : "border-border hover:bg-muted/40"}`}>
+                    <div className="flex items-baseline justify-between">
+                      <p className="text-sm font-medium">{cat.label}</p>
+                      <span className="text-[10px] text-muted-foreground ml-2">{cat.account_code}</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">{cat.desc}</p>
+                  </button>
+                  {subs.map((sub: any) => {
+                    const isSubSel = selected?.value === sub.id && selected?.isCustom;
+                    return (
+                      <button key={sub.id} onClick={() => setSelected({ value: sub.id, isCustom: true })}
+                        className={`w-full text-left rounded-lg border ml-5 mt-0.5 px-3 py-1.5 text-xs transition-colors ${isSubSel ? "border-primary bg-primary/10" : "border-border hover:bg-muted/40"}`}>
+                        <span className="text-muted-foreground mr-1">└</span>
+                        <span className="font-medium">{sub.name}</span>
+                        <span className="text-muted-foreground ml-2">→ {sub.account_code}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })}
+            {/* Add sub-category button */}
+            <button onClick={() => setShowAddSub(true)}
+              className="w-full text-left rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground hover:border-primary hover:text-primary transition-colors flex items-center gap-1.5 mt-1">
+              <Plus className="h-3.5 w-3.5" />
+              Add a custom sub-category (e.g. "Temp Loan — Raju", "Personal — Sandeep")
             </button>
-          ))}
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={doSave} disabled={!category || saving}>
-            {saving ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Saving…</> : "Save & Continue"}
-          </Button>
-        </DialogFooter>
+          </div>
+        )}
+
+        {!showAddSub && (
+          <DialogFooter>
+            <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button onClick={doSave} disabled={!selected || saving}>
+              {saving ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Saving…</> : "Save & Continue"}
+            </Button>
+          </DialogFooter>
+        )}
       </DialogContent>
     </Dialog>
   );
