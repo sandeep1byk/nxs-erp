@@ -296,12 +296,14 @@ function TxnRow({ txn, rules }: { txn:any; rules:any[]; }) {
         <td className="px-3 py-2 text-xs leading-relaxed">{txn.description}</td>
         <td className="px-3 py-2 text-xs text-right">{txn.debit?<span className="text-red-600 font-medium">{fmtAED(txn.debit)}</span>:<span className="text-muted-foreground">—</span>}</td>
         <td className="px-3 py-2 text-xs text-right">{txn.credit?<span className="text-green-600 font-medium">{fmtAED(txn.credit)}</span>:<span className="text-muted-foreground">—</span>}</td>
-        <td className="px-3 py-2 text-xs">{txn.counterparty||"—"}</td>
-        <td className="px-3 py-2 text-xs">{txn.notes||""}</td>
-        <td className="px-3 py-2">
-          <span className="inline-flex items-center gap-1 text-green-600 text-xs font-medium whitespace-nowrap">
-            <CheckCircle className="h-3.5 w-3.5"/>Done
-          </span>
+        <td className="px-3 py-2 text-xs" colSpan={3}>
+          <div className="flex items-center gap-2">
+            <span className="font-medium">{txn.counterparty||"—"}</span>
+            {txn.notes&&<span className="text-muted-foreground text-[10px]">({txn.notes})</span>}
+            <span className="ml-auto inline-flex items-center gap-1 text-green-600 text-xs font-medium whitespace-nowrap">
+              <CheckCircle className="h-3.5 w-3.5"/>Reconciled
+            </span>
+          </div>
         </td>
       </tr>
     );
@@ -328,23 +330,34 @@ function TxnRow({ txn, rules }: { txn:any; rules:any[]; }) {
         </td>
 
         {/* Inline counterparty + reconcile */}
-        <td className="px-3 py-2 align-top" colSpan={2}>
-          <div className="flex items-center gap-1.5">
-            <div className="flex-1 relative">
+        <td className="px-3 py-2 align-top" colSpan={3}>
+          <div className="flex items-center gap-1">
+            <div className="flex-1 relative min-w-0">
               <Input
-                className="h-7 text-xs pr-1"
+                className="h-7 text-xs"
                 placeholder={isDebit?"Who did you pay?":"Who paid you?"}
                 value={counterparty}
                 onChange={e=>setCounterparty(e.target.value)}
                 onKeyDown={e=>{ if(e.key==="Enter") reconcile(); }}
               />
               {matchedRule && (
-                <span className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[9px] text-primary font-medium truncate max-w-[60px]">
+                <span className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[9px] text-primary font-medium truncate max-w-[60px] pointer-events-none">
                   {CATEGORIES.find(c=>c.value===matchedRule.category)?.label||matchedRule.category}
                 </span>
               )}
             </div>
-            <Button size="sm" className="h-7 text-xs px-2 whitespace-nowrap" onClick={()=>reconcile()} disabled={saving}>
+            {/* + button: always visible — click to add/change this name's category */}
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 w-7 p-0 flex-shrink-0"
+              title="Add / change counterparty category"
+              onClick={()=>{ if(!counterparty.trim()){return;} setShowNewParty(true); }}
+              disabled={saving||!counterparty.trim()}
+            >
+              <Plus className="h-3.5 w-3.5"/>
+            </Button>
+            <Button size="sm" className="h-7 text-xs px-2 whitespace-nowrap flex-shrink-0" onClick={()=>reconcile()} disabled={saving}>
               {saving?<Loader2 className="h-3 w-3 animate-spin"/>:<><CheckCircle className="h-3 w-3 mr-1"/>Done</>}
             </Button>
           </div>
@@ -355,12 +368,6 @@ function TxnRow({ txn, rules }: { txn:any; rules:any[]; }) {
           )}
         </td>
 
-        <td className="px-2 py-2 align-top">
-          <span className={`inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-full font-medium ${isDebit?"bg-red-100 text-red-700 dark:bg-red-900/30":"bg-green-100 text-green-700 dark:bg-green-900/30"}`}>
-            {isDebit?<ArrowUpCircle className="h-2.5 w-2.5"/>:<ArrowDownCircle className="h-2.5 w-2.5"/>}
-            {isDebit?"Out":"In"}
-          </span>
-        </td>
       </tr>
 
       {showNewParty && (
@@ -435,13 +442,12 @@ export default function Bank() {
                     <th className="text-left px-3 py-2 text-xs font-semibold">Description</th>
                     <th className="text-right px-3 py-2 text-xs font-semibold whitespace-nowrap">Money Out</th>
                     <th className="text-right px-3 py-2 text-xs font-semibold whitespace-nowrap">Money In</th>
-                    <th className="px-3 py-2 text-xs font-semibold" colSpan={2}>Counterparty → Category</th>
-                    <th className="px-2 py-2 text-xs font-semibold">Dir.</th>
+                    <th className="px-3 py-2 text-xs font-semibold" colSpan={3}>Counterparty → Category</th>
                   </tr>
                 </thead>
                 <tbody>
                   {txns.isLoading
-                    ? <tr><td colSpan={7} className="text-center py-8 text-sm text-muted-foreground">Loading…</td></tr>
+                    ? <tr><td colSpan={6} className="text-center py-8 text-sm text-muted-foreground">Loading…</td></tr>
                     : filteredTxns.map((t:any)=><TxnRow key={t.id} txn={t} rules={rules}/>)
                   }
                 </tbody>
