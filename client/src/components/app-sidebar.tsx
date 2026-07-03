@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, Building2, ClipboardList, Users, Truck, Clock, Wallet,
   ShoppingCart, Package, FileText, Receipt, BookOpen, Landmark, HardHat,
-  FolderArchive, BellRing, LogOut, FileSignature, Handshake, Store, Zap, Star, ArrowDownToLine, ScrollText, BarChart3,
+  FolderArchive, BellRing, LogOut, FileSignature, Handshake, Store, Zap, Star, ArrowDownToLine, ScrollText, BarChart3, CalendarDays,
 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
@@ -41,6 +41,7 @@ const GROUPS: NavGroup[] = [
   ]},
   { title: "Finance", items: [
     { key: "finance", label: "Quick Entry", href: "/finance-quick-entry", icon: Zap },
+    { key: "finance", label: "Daybook", href: "/daybook", icon: CalendarDays },
     { key: "finance", label: "Tally Import", href: "/tally-import", icon: ArrowDownToLine },
     { key: "invoices", label: "Invoices", href: "/invoices", icon: Receipt },
     { key: "finance", label: "Chart of Accounts", href: "/accounts", icon: BookOpen },

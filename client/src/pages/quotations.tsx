@@ -13,9 +13,10 @@ import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, getAuthToken } from "@/lib/queryClient";
 import { fmtDate, fmtAED, nextNumber, COMPANY, todayLocal } from "@/lib/nxs";
+import { openPrintTab } from "@/components/print-doc";
 import {
   Plus, Printer, Trash2, Edit, Upload, X, Search, Package,
-  FileText, Loader2, BookOpen, ImagePlus, ChevronDown, ChevronUp
+  FileText, Loader2, BookOpen, ImagePlus, ChevronDown, ChevronUp, ExternalLink
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -958,14 +959,26 @@ function PrintView({ q, clients, onClose }: { q: Quotation; clients: any[]; onCl
     <div style={{ fontSize: 10, fontWeight: 700, color: "#bd7214", textTransform: "uppercase" as const, margin: "8px 0 4px" }}>{children}</div>
   );
 
+  function handleOpenPrintTab() {
+    // Grab the fully-rendered quote HTML from #pv and open in a brand-new tab.
+    // This ensures ALL pages print (no truncation) and there is no leading blank
+    // page introduced by the browser's own print pipeline running inside a dialog.
+    const el = document.getElementById("pv");
+    if (!el) return;
+    // Wrap each top-level section in <div class="page">…</div> so the print CSS
+    // in openPrintTab paginates cleanly (removes the leading blank page too).
+    const html = `<div style="font-family:Arial,sans-serif; color:#1a1a1a;">${el.innerHTML}</div>`;
+    openPrintTab(html, `Quotation ${q.quot_number}`);
+  }
+
   return (
     <Dialog open onOpenChange={onClose}>
       <DialogContent className="max-w-4xl p-0 flex flex-col" style={{ height: "92vh", maxHeight: "92vh" }}>
         <div className="flex items-center justify-between px-4 py-2.5 border-b shrink-0">
           <span className="font-semibold text-sm">Print Preview — {q.quot_number}</span>
           <div className="flex gap-2">
-            <Button size="sm" onClick={() => window.print()} className="bg-amber-600 hover:bg-amber-700 text-white">
-              <Printer className="h-4 w-4 mr-1" /> Print / PDF
+            <Button size="sm" onClick={handleOpenPrintTab} className="bg-amber-600 hover:bg-amber-700 text-white">
+              <ExternalLink className="h-4 w-4 mr-1" /> Open Print View
             </Button>
             <Button size="sm" variant="outline" onClick={onClose}>Close</Button>
           </div>
@@ -975,7 +988,7 @@ function PrintView({ q, clients, onClose }: { q: Quotation; clients: any[]; onCl
           <div id="pv" style={{ fontFamily: "Arial, sans-serif", fontSize: 11, color: "#1a1a1a", background: "#fff" }}>
 
             {/* COVER */}
-            <div style={{ minHeight: "29.7cm", display: "flex", flexDirection: "column" }}>
+            <div style={{ display: "flex", flexDirection: "column", pageBreakAfter: "always" }}>
               <div style={{ background: "#0c1125", padding: "14px 22px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <img src={COMPANY.logo} alt="NXS" style={{ height: 38, objectFit: "contain" }} onError={e => (e.currentTarget.style.display = 'none')} />
                 <div style={{ textAlign: "right", color: "#fff" }}>
