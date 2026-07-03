@@ -99,7 +99,14 @@ function registerCrud(
   });
 
   app.post(`/api/${path}`, auth, async (req, res) => {
-    const { data, error } = await supabase.from(table).insert(dehydrate(req.body)).select().single();
+    const body = dehydrate(req.body);
+    // Auto-generate entry_number for journal_entries if not provided
+    if (table === "journal_entries" && !body.entry_number) {
+      const y = new Date().getFullYear();
+      const seq = Date.now().toString().slice(-6);
+      body.entry_number = `JV-${y}-${seq}`;
+    }
+    const { data, error } = await supabase.from(table).insert(body).select().single();
     if (error) return res.status(400).json({ message: error.message });
     res.json(hydrate(data));
   });

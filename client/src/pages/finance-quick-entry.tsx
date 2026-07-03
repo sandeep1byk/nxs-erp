@@ -711,6 +711,32 @@ function PurchaseExpenseForm({ onBack, defaultKind }: { onBack: () => void; defa
   );
 }
 
+// ── Advance Balance Display ─────────────────────────────────────────────────
+function AdvanceBalance({ employeeId, employees }: { employeeId: string; employees: any[] }) {
+  const { data: jEntries = [] } = useQuery<any[]>({ queryKey: ["/api/journal_entries"] });
+  if (!employeeId) return null;
+  const emp = employees.find((x: any) => x.id === employeeId);
+  const balance = (jEntries as any[]).reduce((sum: number, je: any) => {
+    const lines = typeof je.lines === "string" ? JSON.parse(je.lines || "[]") : (je.lines || []);
+    return sum + lines.reduce((s: number, l: any) => {
+      if (l.account_code === "1600" && (l.account_name || "").includes(emp?.full_name || "__none__")) {
+        return s + (Number(l.debit) || 0) - (Number(l.credit) || 0);
+      }
+      return s;
+    }, 0);
+  }, 0);
+  const bal = Math.max(0, balance);
+  return (
+    <div className={`p-3 rounded-lg border text-sm font-medium flex items-center justify-between ${
+      bal > 0 ? "bg-green-50 border-green-200 text-green-800 dark:bg-green-900/20 dark:text-green-300"
+              : "bg-slate-50 border-slate-200 text-slate-600 dark:bg-slate-900/20 dark:text-slate-400"
+    }`}>
+      <span>Outstanding advance — {emp?.full_name || "Employee"}</span>
+      <span className="text-lg font-bold">{fmtAED(bal)}</span>
+    </div>
+  );
+}
+
 // ── Petty Cash Form ──────────────────────────────────────────────────────────
 function PettyCashForm({ onBack }: { onBack: () => void }) {
   const employees = useList("employees");
@@ -829,6 +855,8 @@ function PettyCashForm({ onBack }: { onBack: () => void }) {
           <div className="p-3 bg-amber-50 dark:bg-amber-900/20 rounded-lg text-xs text-amber-700 dark:text-amber-300">
             Expense Account ← Employee Temp Loan. Use when employee submits bills. Reduces their advance balance.
           </div>
+          {/* Advance balance display */}
+          <AdvanceBalance employeeId={clearForm.employee_id} employees={employees.data || []} />
           <div className="grid grid-cols-2 gap-4">
             <div>
               <Label>Date *</Label>

@@ -30,7 +30,12 @@ export function fmtNum(n: number | string | undefined | null, dp = 2): string {
 export function fmtDate(d?: string | null): string {
   if (!d) return "—";
   try {
-    return new Date(d).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+    // Parse date without timezone conversion — treat YYYY-MM-DD as local date
+    const s = String(d);
+    const dateOnly = s.slice(0, 10); // "2026-07-01"
+    const [y, m, day] = dateOnly.split("-").map(Number);
+    const dt = new Date(y, m - 1, day); // local date, no UTC shift
+    return dt.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
   } catch {
     return String(d);
   }
