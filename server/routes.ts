@@ -382,7 +382,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   registerCrud(app, "inventory_items", "inventory_items");
   registerCrud(app, "stock_locations", "stock_locations");
   registerCrud(app, "stock_ledger", "stock_ledger");
-  registerCrud(app, "quotations", "quotations", { jsonCols: jsonItems });
+  registerCrud(app, "quotations", "quotations", { jsonCols: ["items","site_photos","product_photos","scope_items","responsibilities","payment_schedule","optional_items"] });
+  registerCrud(app, "product_library", "product_library", { jsonCols: ["application_areas","sow_steps"] });
+  registerCrud(app, "sow_templates", "sow_templates");
+  registerCrud(app, "tc_library", "tc_library", { orderBy: "sort_order", ascending: true });
   registerCrud(app, "sales_orders", "sales_orders");
   registerCrud(app, "accounts", "accounts", { orderBy: "account_code", ascending: true });
   registerCrud(app, "journal_entries", "journal_entries", { jsonCols: ["lines"] });
@@ -600,6 +603,43 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       res.json({ created, skipped, total: invoices.length });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // ---- Product Library Seed (run once) -----------------------------------
+  app.post("/api/seed-products", auth, requireRole("admin"), async (_req, res) => {
+    try {
+      const { count } = await supabase.from("product_library").select("*", { count: "exact", head: true });
+      if ((count || 0) > 0) return res.json({ message: `Already seeded (${count} products)` });
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const seedData = require("./product_library_seed.json");
+      const BATCH = 20;
+      let inserted = 0;
+      for (let i = 0; i < seedData.length; i += BATCH) {
+        const chunk = seedData.slice(i, i + BATCH);
+        const { error } = await supabase.from("product_library").insert(chunk);
+        if (error) { console.error("Seed error:", error.message); }
+        else inserted += chunk.length;
+      }
+      res.json({ message: `Seeded ${inserted} products` });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
+    }
+  });
+
+  // ---- TDS Upload & Parse --------------------------------------------------
+  app.post("/api/parse-tds", auth, upload.single("file"), async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ message: "No file" });
+      const text = await pdfParse(req.file.buffer);
+      const content = text.text?.slice(0, 4000) || "";
+      // Extract key info using simple heuristics
+      const lines = content.split("\n").map((l: string) => l.trim()).filter(Boolean);
+      const productName = lines[0] || "Unknown Product";
+      const description = lines.slice(1, 5).join(" ").slice(0, 500);
+      res.json({ product_name: productName, description, raw_text: content.slice(0, 2000) });
     } catch (e: any) {
       res.status(500).json({ message: e.message });
     }
