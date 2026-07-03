@@ -50,6 +50,15 @@ export function computeTotals(items: { quantity?: number; unit_price?: number; a
   return { subtotal, vat, total: Math.round((subtotal + vat) * 100) / 100 };
 }
 
+/** Returns today's date as YYYY-MM-DD in the user's local timezone (not UTC) */
+export function todayLocal(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 export function nextNumber(prefix: string): string {
   const y = new Date().getFullYear();
   const seq = Date.now().toString().slice(-5);

@@ -24,7 +24,7 @@ import {
   Receipt, ShoppingCart, CreditCard, Plus, Loader2, ChevronRight, ArrowLeft,
   Wallet, BookOpen, Zap, RefreshCw, Sparkles,
 } from "lucide-react";
-import { fmtAED, nextNumber, computeTotals } from "@/lib/nxs";
+import { fmtAED, nextNumber, computeTotals, todayLocal } from "@/lib/nxs";
 
 type EntryMode = "sales_invoice" | "purchase_expense" | "petty_cash" | "provisional" | null;
 type EntryKind = "purchase" | "expense";
@@ -142,7 +142,7 @@ function ProjectPicker({ value, onChange, required }: { value: string; onChange:
       name,
       project_number: nextNumber("NXS-PRJ"),
       status: "active",
-      start_date: new Date().toISOString().slice(0, 10),
+      start_date: todayLocal(),
     })).json(),
     onSuccess: (p) => {
       queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
@@ -319,7 +319,7 @@ function CategoryPicker({
 function SalesInvoiceForm({ onBack }: { onBack: () => void }) {
   const clients = useList("clients");
   const { toast } = useToast();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayLocal();
 
   const [form, setForm] = useState({
     invoice_number: nextNumber("NXS-INV"),
@@ -327,7 +327,7 @@ function SalesInvoiceForm({ onBack }: { onBack: () => void }) {
     client_id: "",
     project_id: "",
     invoice_date: today,
-    due_date: new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10),
+    due_date: (() => { const d = new Date(); d.setDate(d.getDate()+30); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; })(),
     status: "draft",
     subject: "",
     notes: "",
@@ -427,7 +427,7 @@ function PurchaseExpenseForm({ onBack, defaultKind }: { onBack: () => void; defa
   const employees = useList("employees");
   const { data: accounts = [] } = useQuery<any[]>({ queryKey: ["/api/accounts"] });
   const { toast } = useToast();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayLocal();
 
   const [kind, setKind] = useState<EntryKind>(defaultKind);
 
@@ -452,7 +452,7 @@ function PurchaseExpenseForm({ onBack, defaultKind }: { onBack: () => void; defa
     vendor_id: "",
     project_id: "",
     invoice_date: today,
-    due_date: new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10),
+    due_date: (() => { const d = new Date(); d.setDate(d.getDate()+30); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; })(),
     notes: "",
     items: [] as any[],
   });
@@ -741,7 +741,7 @@ function AdvanceBalance({ employeeId, employees }: { employeeId: string; employe
 function PettyCashForm({ onBack }: { onBack: () => void }) {
   const employees = useList("employees");
   const { toast } = useToast();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayLocal();
   const [tab, setTab] = useState<"disburse" | "clear">("disburse");
 
   // Disburse: Bank → Employee Temp Loan
@@ -967,7 +967,7 @@ const TEMPLATES = [
 function ProvisionalForm({ onBack }: { onBack: () => void }) {
   const { toast } = useToast();
   const { data: accounts = [] } = useQuery<any[]>({ queryKey: ["/api/accounts"] });
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayLocal();
 
   const [selectedTemplate, setSelectedTemplate] = useState("");
   const [form, setForm] = useState({
